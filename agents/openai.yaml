@@ -1,0 +1,6 @@
+interface:
+  display_name: "SEO Code Diagnostic"
+  short_description: "Audit website code for SEO and AdSense approval readiness, including crawlability, content depth, thin-shell risks, and policy/trust gaps."
+  default_prompt: "Use the $seo-code-diagnostic skill to audit this website codebase. Target domain: <domain>. Primary keyword: <keyword>. Include SEO and, if relevant, AdSense approval-readiness risks such as low value content, policy gaps, and thin game/tool pages. Produce a Chinese diagnosis with prioritized fixes."
+policy:
+  allow_implicit_invocation: true

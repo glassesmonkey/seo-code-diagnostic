@@ -1,0 +1,81 @@
+# SEO Code Diagnostic Skill
+
+一个用于 Codex 的网站代码 SEO 和 AdSense 审核诊断 skill。
+
+## 安装
+
+把整个 `seo-code-diagnostic/` 文件夹放到以下任意位置：
+
+- 仓库级：`<repo>/.codex/skills/seo-code-diagnostic/`
+- 用户级：`~/.codex/skills/seo-code-diagnostic/`
+
+如果从 GitHub 安装，可以直接克隆到用户级 skill 目录：
+
+```bash
+git clone https://github.com/glassesmonkey/seo-code-diagnostic.git ~/.codex/skills/seo-code-diagnostic
+```
+
+然后在 Codex 中用 `$seo-code-diagnostic` 显式调用，或让 Codex 在 SEO 代码审计任务中自动触发。
+
+## 推荐提示词
+
+```text
+Use the $seo-code-diagnostic skill to audit this website codebase.
+Target domain: https://example.com
+Primary keyword: background remover
+Secondary keywords: remove background, transparent background, AI background remover
+Please produce a Chinese SEO diagnosis and suggest minimal code fixes.
+```
+
+AdSense 审核诊断：
+
+```text
+Use the $seo-code-diagnostic skill to audit this game/tool site for AdSense approval readiness.
+Target domain: https://example.com
+Primary keyword: suika game
+The site was rejected for low value content. Produce a Chinese AdSense review diagnosis with prioritized fixes.
+```
+
+## 包含内容
+
+- `SKILL.md`：Codex 主要工作流和诊断规则。
+- `scripts/seo_code_audit.py`：离线静态扫描脚本，输出 JSON/Markdown。
+- `references/ahrefs-learning-notes.md`：Ahrefs 官方教程的诊断化学习笔记。
+- `references/adsense-review-diagnostic.md`：AdSense 审核、low value content 和游戏/工具站薄壳风险诊断。
+- `references/seo-principles.md`：中文 SEO 方法论和诊断原则的结构化整理。
+- `references/diagnostic-rubric.md`：P0–P3 诊断标准。
+- `agents/openai.yaml`：Codex UI 元信息。
+
+## 静态扫描脚本用法
+
+```bash
+python scripts/seo_code_audit.py --root . --out seo-audit
+```
+
+带关键词和域名：
+
+```bash
+python scripts/seo_code_audit.py \
+  --root . \
+  --domain "https://example.com" \
+  --keywords "background remover,remove background,transparent background" \
+  --out seo-audit
+```
+
+带 AdSense 审核检查：
+
+```bash
+python scripts/seo_code_audit.py \
+  --root . \
+  --domain "https://example.com" \
+  --keywords "suika game,play suika game" \
+  --adsense \
+  --out seo-audit
+```
+
+脚本会生成：
+
+- `seo-audit.json`
+- `seo-audit.md`
+
+注意：脚本只做静态离线检查。完整 SEO / AdSense 判断还需要构建后查看 HTML、线上抓取、Google Search Console、Ahrefs Site Audit、竞品 SERP、AdSense 拒绝原因、版权授权、真实流量和关键词数据。
