@@ -34,6 +34,7 @@ Use the $seo-code-diagnostic skill to audit this game/tool site for AdSense appr
 Target domain: https://example.com
 Primary keyword: suika game
 The site was rejected for low value content. Produce a Chinese AdSense review diagnosis with prioritized fixes.
+Cover every ADS-* requirement ID with Pass/Fail/Unknown/N/A, evidence, next action, and a Completeness Check.
 ```
 
 ## 包含内容
@@ -41,6 +42,7 @@ The site was rejected for low value content. Produce a Chinese AdSense review di
 - `SKILL.md`：Codex 主要工作流和诊断规则。
 - `scripts/seo_code_audit.py`：离线静态扫描脚本，输出 JSON/Markdown。
 - `references/ahrefs-learning-notes.md`：Ahrefs 官方教程的诊断化学习笔记。
+- `references/adsense-requirements.md`：AdSense 官方来源驱动的 ADS-* 完整审核清单、状态规则和输出协议。
 - `references/adsense-review-diagnostic.md`：AdSense 审核、low value content 和游戏/工具站薄壳风险诊断。
 - `references/seo-principles.md`：中文 SEO 方法论和诊断原则的结构化整理。
 - `references/diagnostic-rubric.md`：P0–P3 诊断标准。
@@ -78,4 +80,4 @@ python scripts/seo_code_audit.py \
 - `seo-audit.json`
 - `seo-audit.md`
 
-注意：脚本只做静态离线检查。完整 SEO / AdSense 判断还需要构建后查看 HTML、线上抓取、Google Search Console、Ahrefs Site Audit、竞品 SERP、AdSense 拒绝原因、版权授权、真实流量和关键词数据。
+注意：脚本只做静态离线检查，并把能证明的风险映射到相关 ADS-* ID。完整 SEO / AdSense 判断还需要构建后查看 HTML、线上抓取、Google Search Console、Ahrefs Site Audit、竞品 SERP、AdSense 拒绝原因、账号状态、版权授权、真实流量和关键词数据。完整 AdSense 审核必须按 `references/adsense-requirements.md` 覆盖全部 73 个 ADS-* ID，并做 Completeness Check。

@@ -291,15 +291,17 @@ def add_issue(issues: List[Issue], severity: str, code: str, file: str, evidence
 
 
 def add_adsense_check(
-    checks: List[Dict[str, str]],
+    checks: List[Dict[str, object]],
     severity: str,
     item: str,
     status: str,
     evidence: str,
     recommendation: str,
+    ids: Optional[List[str]] = None,
 ) -> None:
     checks.append(
         {
+            "ids": ids or [],
             "severity": severity,
             "item": normalize_ws(item),
             "status": status,
@@ -307,6 +309,14 @@ def add_adsense_check(
             "recommendation": normalize_ws(recommendation),
         }
     )
+
+
+def format_ads_ids(ids: object) -> str:
+    if not ids:
+        return ""
+    if isinstance(ids, list):
+        return ", ".join(str(x) for x in ids)
+    return str(ids)
 
 
 def rel_posix(path: Path, root: Path) -> str:
@@ -763,27 +773,27 @@ def audit_adsense_readiness(result: Dict[str, object], root: Path, all_files: Li
     issue_codes = {str(issue.get("code", "")) for issue in seo_issues}
 
     required_page_specs = [
-        ("About 页面", ["about", "about-us", "about_us"], "P0", "说明网站是谁维护、解决什么问题，让审核者看到真实站点身份。"),
-        ("Contact 页面", ["contact", "contact-us", "contact_us"], "P0", "提供可联系邮箱或表单；AdSense 审核通常需要基本联系入口。"),
-        ("Privacy Policy 页面", ["privacy", "privacy-policy", "privacy_policy"], "P0", "补齐隐私政策，并让内容匹配实际 cookies、广告、统计和表单收集行为。"),
-        ("Terms 页面", ["terms", "terms-of-service", "terms_of_service", "tos"], "P0", "补齐使用条款，说明内容、游戏/工具使用边界和免责声明。"),
+        ("About 页面", ["about", "about-us", "about_us"], "P0", ["ADS-UX-05", "ADS-PUB-05"], "说明网站是谁维护、解决什么问题，让审核者看到真实站点身份。"),
+        ("Contact 页面", ["contact", "contact-us", "contact_us"], "P0", ["ADS-UX-05", "ADS-PUB-05"], "提供可联系邮箱或表单；AdSense 审核通常需要基本联系入口。"),
+        ("Privacy Policy 页面", ["privacy", "privacy-policy", "privacy_policy"], "P0", ["ADS-UX-05", "ADS-PRIV-01", "ADS-PRIV-02"], "补齐隐私政策，并让内容匹配实际 cookies、广告、统计和表单收集行为。"),
+        ("Terms 页面", ["terms", "terms-of-service", "terms_of_service", "tos"], "P0", ["ADS-UX-05"], "补齐使用条款，说明内容、游戏/工具使用边界和免责声明。"),
     ]
     required_pages: Dict[str, List[str]] = {}
-    for label, tokens, severity, recommendation in required_page_specs:
+    for label, tokens, severity, ids, recommendation in required_page_specs:
         matches = find_likely_pages(all_files, root, tokens)
         required_pages[label] = matches
         if matches:
-            add_adsense_check(checks, severity, label, "pass", f"发现候选文件：{', '.join(matches[:5])}", "确认页面在导航或页脚中可访问。")
+            add_adsense_check(checks, severity, label, "pass", f"发现候选文件：{', '.join(matches[:5])}", "确认页面在导航或页脚中可访问，且内容不是空模板。", ids)
         else:
-            add_adsense_check(checks, severity, label, "fail", "未发现明显候选文件", recommendation)
+            add_adsense_check(checks, severity, label, "fail", "未发现明显候选文件", recommendation, ids)
 
     article_files = find_likely_article_files(all_files, root)
     if len(article_files) >= 5:
-        add_adsense_check(checks, "P2", "Blog / 内容区", "pass", f"发现约 {len(article_files)} 个候选内容文件", "审核阶段继续保持原创、相关、可索引，避免空壳文章。")
+        add_adsense_check(checks, "P2", "Blog / 内容区", "pass", f"发现约 {len(article_files)} 个候选内容文件", "审核阶段继续保持原创、相关、可索引，避免空壳文章。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CRAWL-07"])
     elif article_files:
-        add_adsense_check(checks, "P2", "Blog / 内容区", "warn", f"只发现约 {len(article_files)} 个候选内容文件", "审核前建议准备 5-10 篇围绕游戏/工具主题的原创攻略、教程、推荐或问题解答。")
+        add_adsense_check(checks, "P2", "Blog / 内容区", "warn", f"只发现约 {len(article_files)} 个候选内容文件", "审核前建议准备 5-10 篇围绕游戏/工具主题的原创攻略、教程、推荐或问题解答。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CRAWL-07"])
     else:
-        add_adsense_check(checks, "P2", "Blog / 内容区", "fail", "未发现明显 blog/posts/articles/guides 内容目录", "增加 Blog 或 Guides 区域，先发布 5-10 篇与主关键词和长尾词相关的原创文章。")
+        add_adsense_check(checks, "P2", "Blog / 内容区", "fail", "未发现明显 blog/posts/articles/guides 内容目录", "增加 Blog 或 Guides 区域，先发布 5-10 篇与主关键词和长尾词相关的原创文章。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CRAWL-07"])
 
     iframe_risk_pages = [
         page
@@ -792,9 +802,9 @@ def audit_adsense_readiness(result: Dict[str, object], root: Path, all_files: Li
     ]
     if iframe_risk_pages:
         preview = ", ".join(str(page.get("file", "")) for page in iframe_risk_pages[:8])
-        add_adsense_check(checks, "P1", "游戏/工具页不是纯 iframe 壳", "fail", f"{len(iframe_risk_pages)} 个页面 iframe 较重且正文少：{preview}", "每个游戏/工具页补原创介绍、玩法/使用步骤、FAQ、相关内容和站内链接，不能只嵌入 iframe。")
+        add_adsense_check(checks, "P1", "游戏/工具页不是纯 iframe 壳", "fail", f"{len(iframe_risk_pages)} 个页面 iframe 较重且正文少：{preview}", "每个游戏/工具页补原创介绍、玩法/使用步骤、FAQ、相关内容和站内链接，不能只嵌入 iframe。", ["ADS-CONTENT-02", "ADS-CONTENT-03", "ADS-PROG-06", "ADS-PUB-11"])
     else:
-        add_adsense_check(checks, "P1", "游戏/工具页不是纯 iframe 壳", "pass", "未在静态 HTML 中发现 iframe-heavy thin page", "仍需人工打开核心页确认首屏不是通用模板或纯嵌入壳。")
+        add_adsense_check(checks, "P1", "游戏/工具页不是纯 iframe 壳", "pass", "未在静态 HTML 中发现 iframe-heavy thin page", "仍需人工打开核心页确认首屏不是通用模板或纯嵌入壳。", ["ADS-CONTENT-02", "ADS-CONTENT-03", "ADS-PROG-06", "ADS-PUB-11"])
 
     thin_core_pages = [
         page
@@ -803,38 +813,42 @@ def audit_adsense_readiness(result: Dict[str, object], root: Path, all_files: Li
     ]
     if thin_core_pages:
         preview = ", ".join(f"{page.get('file')}({page.get('text_chars', 0)} chars)" for page in thin_core_pages[:8])
-        add_adsense_check(checks, "P1", "首页/分类/核心页内容厚度", "fail", preview, "首页、分类页、游戏页和工具页要有可读正文、模块说明、FAQ 和相关入口；宁可页面少，也要每页扎实。")
+        add_adsense_check(checks, "P1", "首页/分类/核心页内容厚度", "fail", preview, "首页、分类页、游戏页和工具页要有可读正文、模块说明、FAQ 和相关入口；宁可页面少，也要每页扎实。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CONTENT-04", "ADS-PUB-11"])
     else:
-        add_adsense_check(checks, "P1", "首页/分类/核心页内容厚度", "pass", "未发现明显核心 HTML 页面正文过薄", "如果项目是 SSR/SSG 框架，还需构建后查看源代码确认核心文案真实输出。")
+        add_adsense_check(checks, "P1", "首页/分类/核心页内容厚度", "pass", "未发现明显核心 HTML 页面正文过薄", "如果项目是 SSR/SSG 框架，还需构建后查看源代码确认核心文案真实输出。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CONTENT-04", "ADS-PUB-11"])
 
     if "MISSING_VIEWPORT" in issue_codes:
-        add_adsense_check(checks, "P2", "移动端基础适配", "fail", "SEO 检查发现 MISSING_VIEWPORT", "补充 viewport，并在手机视口确认游戏/工具、导航、内容和潜在广告位不会遮挡。")
+        add_adsense_check(checks, "P2", "移动端基础适配", "fail", "SEO 检查发现 MISSING_VIEWPORT", "补充 viewport，并在手机视口确认游戏/工具、导航、内容和潜在广告位不会遮挡。", ["ADS-UX-01", "ADS-PUB-10", "ADS-REST-08"])
     else:
-        add_adsense_check(checks, "P2", "移动端基础适配", "pass", "未发现 viewport 缺失问题", "仍需人工检查移动端布局和广告位预留。")
+        add_adsense_check(checks, "P2", "移动端基础适配", "pass", "未发现 viewport 缺失问题", "仍需人工检查移动端布局和广告位预留。", ["ADS-UX-01", "ADS-PUB-10", "ADS-REST-08"])
 
     blocking_codes = sorted(issue_codes & {"NOINDEX", "ROBOTS_DISALLOW_ALL", "SITEMAP_MISSING", "CANONICAL_DOMAIN_MISMATCH"})
     if blocking_codes:
-        add_adsense_check(checks, "P0", "抓取/索引基础", "fail", f"发现阻断或高风险 SEO 问题：{', '.join(blocking_codes)}", "AdSense 审核前先修复抓取、索引、sitemap 和 canonical 基础问题。")
+        add_adsense_check(checks, "P0", "抓取/索引基础", "fail", f"发现阻断或高风险 SEO 问题：{', '.join(blocking_codes)}", "AdSense 审核前先修复抓取、索引、sitemap 和 canonical 基础问题。", ["ADS-CRAWL-01", "ADS-CRAWL-02", "ADS-CRAWL-07"])
     else:
-        add_adsense_check(checks, "P0", "抓取/索引基础", "pass", "未发现 noindex、robots 全站误封、sitemap 缺失或 canonical 错域名", "上线后仍需用 Google Search Console 验证真实收录。")
+        add_adsense_check(checks, "P0", "抓取/索引基础", "pass", "未发现 noindex、robots 全站误封、sitemap 缺失或 canonical 错域名", "上线后仍需用 Google Search Console 验证真实收录。", ["ADS-CRAWL-01", "ADS-CRAWL-02", "ADS-CRAWL-07"])
 
     manual_checks = [
         {
+            "ids": ["ADS-CONTENT-01", "ADS-UX-02"],
             "item": "视觉差异化",
             "why": "审核者第一眼会判断这是认真维护的网站，还是批量模板。",
             "how": "参考主打游戏/工具的配色、字体、素材和页面氛围，避免一眼通用模板。",
         },
         {
+            "ids": ["ADS-CONTENT-01", "ADS-CRAWL-07"],
             "item": "真实流量与索引",
             "why": "社区经验显示，近年的 low value content 经常和无人访问、无人搜索命中相关。",
             "how": "提供 GSC 已收录页面、点击/展示、自然搜索趋势和核心页访问数据。",
         },
         {
+            "ids": ["ADS-CONTENT-01", "ADS-CONTENT-03"],
             "item": "GSC 5-20 名查询",
             "why": "这些词已经被 Google 认为相关，通常比从 50 名以外冲首页更容易。",
             "how": "找 impressions 有量、排名 5-20、点击低的查询，补专门页面或优化对应段落。",
         },
         {
+            "ids": ["ADS-PUB-01", "ADS-PUB-02", "ADS-PUB-03", "ADS-PUB-08", "ADS-REST-01", "ADS-REST-06"],
             "item": "版权与政策风险",
             "why": "侵权游戏、成人、赌博、仇恨/暴力等内容可能直接导致拒绝甚至封号。",
             "how": "人工确认游戏授权、素材来源、用户生成内容和站内外链接是否符合政策。",
@@ -867,6 +881,7 @@ def audit_adsense_readiness(result: Dict[str, object], root: Path, all_files: Li
         "近 28/90 天自然流量、展示、点击和核心页面访问数据",
         "游戏/工具素材和内容版权来源说明",
     ]
+    static_ads_ids = sorted({ads_id for check in checks for ads_id in check.get("ids", [])})
 
     return {
         "enabled": True,
@@ -880,7 +895,7 @@ def audit_adsense_readiness(result: Dict[str, object], root: Path, all_files: Li
         "article_files": article_files[:50],
         "iframe_risk_pages": [page.get("file", "") for page in iframe_risk_pages[:50]],
         "thin_core_pages": [page.get("file", "") for page in thin_core_pages[:50]],
-        "summary": {"fail": fail_count, "warn": warn_count, "p0_fail": p0_fail_count, "p1_fail": p1_fail_count},
+        "summary": {"fail": fail_count, "warn": warn_count, "p0_fail": p0_fail_count, "p1_fail": p1_fail_count, "static_ads_ids_evidenced": static_ads_ids},
     }
 
 
@@ -888,12 +903,14 @@ def write_adsense_markdown(lines: List[str], adsense: Dict[str, object]) -> None
     lines.append("## AdSense 审核诊断")
     lines.append(str(adsense.get("conclusion", "")))
     lines.append("")
+    lines.append("静态脚本只输出可从本地代码/静态 HTML 证明的 ADS-* 证据；完整 AdSense 审核仍需按 `references/adsense-requirements.md` 覆盖全部 73 个 ID，并把无法证明的项标为 Unknown 或 N/A。")
+    lines.append("")
     lines.append("### 审核清单")
-    lines.append("| 优先级 | 检查项 | 状态 | 证据 | 建议 |")
-    lines.append("|---|---|---|---|---|")
+    lines.append("| ADS ID | 优先级 | 检查项 | 状态 | 证据 | 建议 |")
+    lines.append("|---|---|---|---|---|---|")
     for check in adsense.get("checks", []):
         lines.append(
-            f"| {escape_md(check.get('severity'))} | {escape_md(check.get('item'))} | {escape_md(check.get('status'))} | {escape_md(check.get('evidence'))} | {escape_md(check.get('recommendation'))} |"
+            f"| {escape_md(format_ads_ids(check.get('ids')))} | {escape_md(check.get('severity'))} | {escape_md(check.get('item'))} | {escape_md(check.get('status'))} | {escape_md(check.get('evidence'))} | {escape_md(check.get('recommendation'))} |"
         )
     lines.append("")
 
@@ -907,10 +924,10 @@ def write_adsense_markdown(lines: List[str], adsense: Dict[str, object]) -> None
     manual_checks = adsense.get("manual_checks", [])
     if manual_checks:
         lines.append("### 必须人工确认")
-        lines.append("| 项目 | 为什么重要 | 怎么确认 |")
-        lines.append("|---|---|---|")
+        lines.append("| ADS ID | 项目 | 为什么重要 | 怎么确认 |")
+        lines.append("|---|---|---|---|")
         for check in manual_checks:
-            lines.append(f"| {escape_md(check.get('item'))} | {escape_md(check.get('why'))} | {escape_md(check.get('how'))} |")
+            lines.append(f"| {escape_md(format_ads_ids(check.get('ids')))} | {escape_md(check.get('item'))} | {escape_md(check.get('why'))} | {escape_md(check.get('how'))} |")
         lines.append("")
 
     manual_data = adsense.get("manual_data_needed", [])

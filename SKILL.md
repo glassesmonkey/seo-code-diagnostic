@@ -1,6 +1,6 @@
 ---
 name: seo-code-diagnostic
-description: "Audit a website codebase for SEO and AdSense approval readiness: on-page SEO, technical SEO, crawlability, SSR/prerendering, TDK, headings, canonical URLs, internal links, image SEO, sitemap/robots, structured data, keyword-to-page content gaps, AdSense review rejection, low value content, policy readiness, game/tool site thin-shell risks, and Chinese diagnosis/code fix plans."
+description: "Audit a website codebase for SEO and AdSense approval readiness: on-page SEO, technical SEO, crawlability, SSR/prerendering, TDK, headings, canonical URLs, internal links, image SEO, sitemap/robots, structured data, keyword-to-page content gaps, AdSense review rejection, low value content, policy readiness, full ADS-* checklist audits with Pass/Fail/Unknown/N/A, game/tool site thin-shell risks, and Chinese diagnosis/code fix plans."
 ---
 
 # SEO Code Diagnostic Skill
@@ -79,7 +79,7 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
   --out seo-audit
 ```
 
-`--adsense` 只做代码能证明的静态风险检查，例如必备页面、Blog/内容区、iframe 薄壳、核心页面内容厚度、移动端 viewport、抓取/索引基础。视觉差异化、真实流量、GSC 排名 5-20 的查询、Google 收录、版权授权和政策敏感内容必须人工确认。
+`--adsense` 只做代码能证明的静态风险检查，并把静态证据映射到相关 ADS-* ID，例如必备页面、Blog/内容区、iframe 薄壳、核心页面内容厚度、移动端 viewport、抓取/索引基础。它不是完整 AdSense 结论；视觉差异化、真实流量、GSC 排名 5-20 的查询、Google 收录、版权授权、账号状态和政策敏感内容必须人工确认。
 
 ### 3. 必查项
 
@@ -157,7 +157,19 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
 
 AdSense 审核的第一性问题：这个网站是否值得展示广告。对游戏站和工具站，审核风险通常不是“少一个 meta 标签”，而是网站看起来像认真维护的内容站，还是自动生成的低质套壳。
 
-当用户说 AdSense 被拒、low value content、policy 或反复 review 失败时，加载 `references/adsense-review-diagnostic.md`，并按这个顺序检查：
+当用户说 AdSense 被拒、low value content、policy、反复 review 失败、是否可以申请 AdSense、复审是否 ready、或要求完整 AdSense 审核时，必须加载：
+
+- `references/adsense-requirements.md`：官方来源驱动的 ADS-* 完整检查表、状态规则和输出协议。
+- `references/adsense-review-diagnostic.md`：游戏站/工具站、low value content、薄壳和长尾内容经验判断。
+
+AdSense 审核不是只查当前看起来可疑的项目。必须逐项覆盖 `adsense-requirements.md` 的全部 73 个 ADS-* ID。每个 ID 只能标记 `Pass`、`Fail`、`Unknown` 或 `N/A`：
+
+- `Pass`：必须有代码、线上抓取、后台、GSC/GA、用户确认或其他明确证据。
+- `Fail`：必须给出页面/文件/证据、精确修复动作和验收标准。
+- `Unknown`：用于必须依赖 AdSense 后台、站长确认、服务器/CDN 配置、GSC/GA、版权授权、法律/隐私判断或更大样本抓取的项目；必须说明缺什么证据。
+- `N/A`：只在该要求确实不适用于当前站点类型/变现模式时使用，并说明原因。
+
+先按这个顺序检查：
 
 1. **视觉差异化**：网站不能一眼像通用模板。游戏站优先参考主打游戏的配色、字体、素材和氛围；工具站要有清晰品牌感和真实产品感。
 2. **不是纯 iframe/工具壳**：纯 iframe 不是内容。每个游戏/工具页至少要有原创介绍、玩法/使用步骤、FAQ、相关游戏/工具和上下文内链。
@@ -167,7 +179,11 @@ AdSense 审核的第一性问题：这个网站是否值得展示广告。对游
 6. **政策红线**：人工确认是否有侵权游戏/素材、成人、赌博、仇恨、暴力等高风险内容。
 7. **长尾词机会**：不要浪费长尾词。结合 GSC 找排名 5-20、展示不低但点击少的查询，优先做页面或补内容。
 
-输出时不要承诺“改完一定通过 AdSense”。要区分静态证据和人工确认项，并说明还需要用户提供 AdSense 拒绝截图、GSC 收录、GSC 查询、流量和授权信息。
+输出时不要承诺“改完一定通过 AdSense”。要区分静态证据、线上证据、后台/账号证据和人工确认项，并说明还需要用户提供 AdSense 拒绝截图、GSC 收录、GSC 查询、流量、账号状态和授权信息。最终 AdSense 决策只能是 `Ready`、`Ready after fixes` 或 `Not ready`，并且必须在报告最后做 Completeness Check：
+
+- `Requirement IDs in reference: 73`
+- `Requirement IDs in report: <count>`
+- `Missing IDs: none` 或列出缺失 ID
 
 ### 5. 框架专项判断
 
@@ -240,7 +256,15 @@ AdSense 分支中：
 - robots / sitemap / canonical / SSR / schema / image / performance
 
 ## AdSense 审核诊断（如果用户要求）
-| 优先级 | 检查项 | 状态 | 证据 | 建议 |
+| ADS ID | 优先级 | 状态 | 证据 | 建议 |
+
+## AdSense 完整检查表（如果用户要求 AdSense 审核）
+| ADS ID | Severity | Status | Evidence | Next action |
+
+## Completeness Check（如果用户要求 AdSense 审核）
+- Requirement IDs in reference: 73
+- Requirement IDs in report: ...
+- Missing IDs: ...
 
 ## Low value content 可能原因（如果用户要求）
 - ...
