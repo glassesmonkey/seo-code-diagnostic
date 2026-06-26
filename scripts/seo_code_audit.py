@@ -66,6 +66,7 @@ EXCLUDED_PARTS = {
 HTML_EXTS = {".html", ".htm"}
 SOURCE_EXTS = {".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro", ".md", ".mdx"}
 TEXT_EXTS = HTML_EXTS | SOURCE_EXTS | {".json", ".xml", ".txt", ".config", ".mjs", ".cjs"}
+COPY_REVIEW_SOURCE_EXTS = {".jsx", ".tsx", ".vue", ".svelte", ".astro", ".md", ".mdx"}
 MAX_READ_BYTES = 700_000
 
 SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
@@ -319,6 +320,88 @@ def format_ads_ids(ids: object) -> str:
     return str(ids)
 
 
+YMYL_TOPIC_PATTERNS = [
+    r"\b(diabetes|cancer|depression|anxiety|blood pressure|heart disease|medical|medicine|medication|health)\b",
+    r"\b(loan|mortgage|debt|credit card|investment|investing|stock|tax|insurance|retirement)\b",
+    r"\b(legal|lawsuit|immigration|divorce|contract|bankruptcy|attorney|lawyer)\b",
+    r"\b(emergency|dangerous|personal safety|public safety|security risk)\b",
+    r"(糖尿病|癌症|抑郁|焦虑|血压|心脏病|医疗|药物|健康|治疗)",
+    r"(贷款|债务|信用卡|投资|股票|税务|保险|退休|理财)",
+    r"(法律|律师|诉讼|移民|离婚|合同|破产)",
+    r"(安全|紧急|危险|事故|风险)",
+    r"(糖尿病|がん|癌|うつ|血圧|心臓病|医療|薬|健康|治療)",
+    r"(投資|ローン|借金|税金|保険|退職)",
+    r"(法律|弁護士|訴訟|離婚|移民|契約)",
+    r"(安全|緊急|危険|事故|リスク)",
+    r"\b(diabetes|krebs|depression|blutdruck|herzkrankheit|medizin|medikament|gesundheit|behandlung)\b",
+    r"\b(kredit|darlehen|schulden|investition|aktien|steuer|versicherung|rente|rendite)\b",
+    r"\b(recht|anwalt|klage|scheidung|einwanderung|vertrag|insolvenz)\b",
+    r"\b(sicherheit|notfall|gefährlich|unfall|risiko)\b",
+]
+
+YMYL_CLAIM_PATTERNS = [
+    r"\b(guaranteed?|cures?|cure|treats?|diagnose|prevents?|you should|must|always|never|risk-free|make money|profit|invest now|medical advice|legal advice)\b",
+    r"(保证|必定|一定|根治|治愈|治疗|诊断|预防|你应该|必须|无风险|保本|稳赚|赚钱|立刻投资|医疗建议|法律建议)",
+    r"(保証|必ず|絶対|治す|治療|診断|予防|すべき|必須|リスクなし|儲かる|今すぐ投資|医療助言|法的助言)",
+    r"\b(garantiert|heilen|heilung|behandeln|diagnose|verhindern|sie sollten|müssen|immer|niemals|risikofrei|gewinn|geld verdienen|investieren|medizinischer rat|rechtsberatung)\b",
+]
+
+INTERNAL_COPY_PATTERNS = [
+    r"(内部要求|内部说明|内部备注|模型思考|思考过程|提示词|系统提示|开发者提示|不要直接面向用户|面向用户文案|待人工改写|占位文案)",
+    r"\b(internal requirements?|internal notes?|internal instructions?|model reasoning|chain of thought|thought process|system prompt|developer prompt|prompt draft|draft copy|placeholder copy|for internal use|not for users?|do not show to users?|as an ai language model)\b",
+    r"(内部要件|内部メモ|内部指示|モデルの思考|思考過程|システムプロンプト|開発者プロンプト|プロンプト|ユーザーに表示しない|下書き|プレースホルダー)",
+    r"\b(interne anforderungen|interner hinweis|interne notiz|interne anweisung|denkprozess|gedankengang|system-?prompt|entwickler-?prompt|nicht für nutzer|nicht anzeigen|platzhaltertext|entwurf)\b",
+]
+
+
+def matches_any(patterns: List[str], text: str) -> bool:
+    return any(re.search(pattern, text, flags=re.I) for pattern in patterns)
+
+
+def copy_review_snippets(text: str) -> Iterable[str]:
+    for part in re.split(r"(?<=[.!?。！？；;])\s+|\n+", text):
+        snippet = normalize_ws(part)
+        if not snippet:
+            continue
+        if len(snippet) <= 420:
+            yield snippet
+            continue
+        for start in range(0, len(snippet), 360):
+            window = normalize_ws(snippet[start : start + 420])
+            if window:
+                yield window
+
+
+def audit_copy_text(text: str, file_rel: str, confidence: str) -> List[Issue]:
+    issues: List[Issue] = []
+    found_ymyl = False
+    found_internal = False
+    for snippet in copy_review_snippets(text):
+        if not found_ymyl and matches_any(YMYL_TOPIC_PATTERNS, snippet) and matches_any(YMYL_CLAIM_PATTERNS, snippet):
+            add_issue(
+                issues,
+                "P1",
+                "YMYL_COPY_REVIEW",
+                file_rel,
+                f"{confidence}命中 YMYL 风险文案：{snippet}",
+                "人工审稿：如果这是用户可见文案，避免给健康/财务/法律/安全承诺或建议；改成信息性说明，补充来源/资质/免责声明，或移除该主题。",
+            )
+            found_ymyl = True
+        if not found_internal and matches_any(INTERNAL_COPY_PATTERNS, snippet):
+            add_issue(
+                issues,
+                "P1",
+                "INTERNAL_COPY_LEAK",
+                file_rel,
+                f"{confidence}命中内部/模型痕迹：{snippet}",
+                "把内部要求、prompt/模型思考或草稿说明改成真实用户语言；如果只是开发注释，确认不会渲染到页面。",
+            )
+            found_internal = True
+        if found_ymyl and found_internal:
+            break
+    return issues
+
+
 def rel_posix(path: Path, root: Path) -> str:
     return rel(path, root).replace(os.sep, "/")
 
@@ -567,6 +650,8 @@ def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: Lis
     elif text_chars < 900:
         add_issue(issues, "P2", "THIN_CONTENT", file_rel, f"可见文本约 {text_chars} 字符", "检查页面是否充分覆盖搜索意图；核心落地页应补充步骤、功能、场景、FAQ、信任信号和相关链接。")
 
+    issues.extend(audit_copy_text(text, file_rel, "高置信可见文本"))
+
     if parser.images:
         missing_alt_ratio = len(missing_alt) / max(len(parser.images), 1)
         if missing_alt:
@@ -681,6 +766,9 @@ def audit_source_files(root: Path, source_files: List[Path]) -> Dict[str, object
                     "为重要图片添加描述性 alt；装饰图使用 alt=\"\"。",
                 )
                 break
+
+        if path.suffix.lower() in COPY_REVIEW_SOURCE_EXTS:
+            findings.extend(audit_copy_text(content, file_rel, "中置信源码/内容"))
 
     # Repo-level hints.
     if summary["route_files"] and not summary["metadata_files"]:

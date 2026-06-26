@@ -25,6 +25,7 @@ Target domain: https://example.com
 Primary keyword: background remover
 Secondary keywords: remove background, transparent background, AI background remover
 Please produce a Chinese SEO diagnosis and suggest minimal code fixes.
+Also flag YMYL copy risks and internal/prompt/model-thinking copy leaks.
 ```
 
 AdSense 审核诊断：
@@ -79,5 +80,10 @@ python scripts/seo_code_audit.py \
 
 - `seo-audit.json`
 - `seo-audit.md`
+
+脚本默认会提示两类文案风险：
+
+- `YMYL_COPY_REVIEW`：健康、财务、安全、法律等 YMYL 主题出现建议、承诺、保证、诊断、收益、治疗等高风险表达。
+- `INTERNAL_COPY_LEAK`：内部要求、prompt、模型思考过程、草稿说明、占位文案等不能直接面向用户的文案。
 
 注意：脚本只做静态离线检查，并把能证明的风险映射到相关 ADS-* ID。完整 SEO / AdSense 判断还需要构建后查看 HTML、线上抓取、Google Search Console、Ahrefs Site Audit、竞品 SERP、AdSense 拒绝原因、账号状态、版权授权、真实流量和关键词数据。完整 AdSense 审核必须按 `references/adsense-requirements.md` 覆盖全部 73 个 ADS-* ID，并做 Completeness Check。

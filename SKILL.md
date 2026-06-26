@@ -1,6 +1,6 @@
 ---
 name: seo-code-diagnostic
-description: "Audit a website codebase for SEO and AdSense approval readiness: on-page SEO, technical SEO, crawlability, SSR/prerendering, TDK, headings, canonical URLs, internal links, image SEO, sitemap/robots, structured data, keyword-to-page content gaps, AdSense review rejection, low value content, policy readiness, full ADS-* checklist audits with Pass/Fail/Unknown/N/A, game/tool site thin-shell risks, and Chinese diagnosis/code fix plans."
+description: "Audit a website codebase for SEO and AdSense approval readiness: on-page SEO, technical SEO, crawlability, SSR/prerendering, TDK, headings, canonical URLs, internal links, image SEO, sitemap/robots, structured data, keyword-to-page content gaps, YMYL copy risk, internal/prompt/model-thinking copy leaks, AdSense review rejection, low value content, policy readiness, full ADS-* checklist audits with Pass/Fail/Unknown/N/A, game/tool site thin-shell risks, and Chinese diagnosis/code fix plans."
 ---
 
 # SEO Code Diagnostic Skill
@@ -126,6 +126,14 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
 - 一个页面不要同时竞争多个完全不同的搜索意图；必要时拆页。
 - 用语义相关词围绕主词解释，例如 “remove background” 页面可自然覆盖 upload image、transparent background、PNG、AI background remover、photo editor、erase background、download result 等。
 
+#### 文案安全与真实用户语言
+
+- 默认审计 YMYL 文案风险。YMYL 不是禁词；只有健康、财务、安全、法律、重大社会福祉等主题出现建议、承诺、保证、诊断、收益、治疗、风险规避等表达时，才标为高风险并要求人工审稿。
+- 对 YMYL 风险文案，给出原文证据、风险原因和用户可见改写方向：改成信息性说明，补充来源/资质/免责声明，或移除该主题，不要给未经证明的医疗、金融、法律或安全承诺。
+- 默认审计内部/模型痕迹文案：内部要求、内部说明、prompt、system/developer prompt、模型思考过程、chain of thought、草稿说明、占位文案、面向执行者的要求，都不能直接出现在用户页面。
+- 对内部痕迹，要求改成真实用户语言：描述用户能做什么、会看到什么、能获得什么结果；不要暴露“模型怎么想”“内部要怎么写”“这段给审核/SEO/LLM 看”等生产过程。
+- 脚本里的 `YMYL_COPY_REVIEW` 和 `INTERNAL_COPY_LEAK` 是启发式抓漏。HTML 可见文本证据置信度高；源码/内容文件证据必须确认是否真实渲染到用户页面。
+
 #### 内链建设
 
 - 首页链接到核心二级/三级关键词页面。
@@ -215,7 +223,7 @@ AdSense 审核不是只查当前看起来可疑的项目。必须逐项覆盖 `a
 ### 6. 严重级别
 
 - **P0 阻断型**：noindex/robots 误封、重要页面无法生成 HTML、核心页面 4xx/5xx、canonical 指向错误域名或死链、纯 CSR 导致几乎无可读内容。
-- **P1 高影响**：缺 title/description/H1/canonical、多个 H1、动态页复用同一 TDK、重要页面孤儿、sitemap 缺核心 URL、结构严重混乱。
+- **P1 高影响**：缺 title/description/H1/canonical、多个 H1、动态页复用同一 TDK、重要页面孤儿、sitemap 缺核心 URL、结构严重混乱、YMYL 承诺型文案、内部/prompt/模型思考痕迹出现在用户文案中。
 - **P2 中影响**：内容薄、搜索意图覆盖不足、内链层级不清、图片 alt 缺失、FAQ/相关页模块缺失、关键词页面映射不清。
 - **P3 优化项**：标题过长/过短、OG/Twitter 不完整、schema 可增强、图片文件名可优化、段落可读性改进。
 
@@ -248,6 +256,9 @@ AdSense 分支中：
 
 ## 页面结构与内容缺口
 | 页面 | H1 | H2/H3 覆盖 | 缺失模块 | 建议补充 |
+
+## 文案风险审计
+| 优先级 | 页面/文件 | 风险类型 | 原文证据 | 为什么有风险 | 用户语言改写方向 |
 
 ## 内链结构建议
 | 来源页 | 锚文本 | 目标页 | 原因 |
@@ -289,6 +300,8 @@ AdSense 分支中：
 - 不要承诺“改完一定上首页”。
 - 不要伪造 Ahrefs、GSC、GA、排名、搜索量、外链数据。
 - 不要为了关键词密度把文案改成机械重复。
+- 不要把 YMYL 主题写成未经证明的医疗、金融、法律或安全建议/承诺。
+- 不要把内部要求、prompt、模型思考过程、草稿说明或占位文案直接暴露给用户。
 - 不要把所有页面 canonical 到首页。
 - 不要给不存在的评分、评论、奖项、案例加结构化数据。
 - 不要只检查 React 组件是否有 `<h1>`，还要确认构建后的 HTML 或 SSR 输出是否可见。
