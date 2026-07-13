@@ -1,133 +1,90 @@
-# SEO 代码诊断 Rubric
+# SEO 诊断严重度 Rubric
 
-## P0：必须优先修复
+本文件是 SEO finding 的 `impact: P0 | P1 | P2 | P3` 唯一事实源。页面类型与内容判断见 [`seo-principles.md`](seo-principles.md)；框架证据边界见 [`framework-adapters.md`](framework-adapters.md)；`status` 与输出字段见 [`report-contract.md`](report-contract.md)。
 
-| 检查项 | 代码证据 | 典型修复 |
+## 先分开 status 与 impact
+
+- `status` 回答“证据是否证明”：`Confirmed / Candidate / Unknown`。
+- `impact` 回答“如果成立，影响多大”：`P0 / P1 / P2 / P3`。
+- P0–P2 汇总只统计 `Confirmed`。一个源码命中的 P0 候选仍不是“已发现 P0”。
+- 源码正则最多是 `Candidate`；读取失败、截断、未映射或意图未知是 `Unknown`。
+- 升级 impact 必须有目标页优先级、受影响路由数和索引意图证据；不能因规则名看起来严重而升级。
+
+## P0：已确认的索引阻断或核心路由失效
+
+只在目标路由明确希望索引且当前证据证明阻断时使用。
+
+| Rule | P0 条件 | 不满足时 |
 |---|---|---|
-| 核心页面 noindex | `<meta name="robots" content="noindex">` | 去掉 noindex 或按页面类型条件化 |
-| robots.txt 误封全站 | `User-agent: *` + `Disallow: /` | 生产环境允许核心页面抓取 |
-| 纯 CSR 无正文 | 初始 HTML 只有 root div 和 script | SSR/SSG/prerender；把核心文案放进 HTML |
-| canonical 错域名/死链 | canonical 指向 staging、localhost、旧域名、404 | 使用生产 HTTPS 绝对 URL |
-| 动态页面无唯一 HTML | 所有动态页复用同一 TDK/内容 | 基于 slug 数据生成唯一 metadata 和正文 |
-| sitemap/robots 指向测试域 | sitemap URL 是 localhost/staging | 统一生产 canonical host |
+| `INDEX_INTENT_CONFLICT` | 核心目标页实际 `noindex`，或 robots 明确阻止该页抓取 | 意图未知为 `Unknown`；非核心页通常 P1 |
+| `HTTP_UNREACHABLE` | 核心目标页稳定返回 4xx/5xx、认证拦截或不可达 | 临时失败先 `Unknown`；非核心页按 P1/P2 |
+| `ROBOTS_SITE_BLOCK` | 当前 robots 对目标 crawler 封锁全部核心公开路由 | 单一路由冲突按该路由优先级判断 |
+| `CANONICAL_CONFLICT` | 核心页 canonical 指向错误主机、不可达 URL 或明显不同实体，造成合并风险 | 仅缺 canonical 不能使用 P0/P1 |
+| `ROUTE_OUTPUT_COLLAPSE` | 多个核心动态 URL 当前响应为同一错误/占位实体，且无法形成独立页面 | 只有源码复用线索时为 `Candidate` |
 
-## P1：高影响问题
+## P1：已确认的高影响页面或系统性问题
 
-| 检查项 | 代码证据 | 典型修复 |
+| Rule | P1 条件 | 降级/排除条件 |
 |---|---|---|
-| 缺 title | 无 `<title>` / metadata.title | 为每页生成唯一 title |
-| 缺 description | 无 meta description | 写具体收益和搜索意图 |
-| 缺 H1 或多个 H1 | `<h1>` 为 0 或多个 | 每页一个主 H1 |
-| 缺 canonical | 无 rel canonical | 生成自引用 canonical |
-| sitemap 缺失 | 无 sitemap 文件/路由 | 增加 sitemap，列 canonical URL |
-| 重要页面孤儿 | sitemap 有但站内无链接 | 从首页/分类/相关页面加内链 |
-| 全站复用 TDK | layout 里固定 title/description | 动态按页面生成 |
+| `TITLE_MISSING` | 可索引目标页的当前 HTML 没有可用 title | 意图未知为 `Unknown` |
+| `MAIN_HEADING_UNCLEAR` | 页面没有可识别主标题，或多个同等显著标题让主标题不清 | 仅 `<h1>` 数量大于 1 不成立 |
+| `METADATA_COLLISION` | 多个不同意图的目标 URL 当前输出相同 title/canonical 等冲突信号 | 单一源码模板线索为 `Candidate` |
+| `SOFT_404` | 无效 slug 返回 200 且呈现空白、占位或与有效实体近似的可索引页面 | 正确 404/redirect 不评分 |
+| `RENDERED_CONTENT_MISSING` | 核心目标页当前 HTML 缺少完成主要任务所需的正文/控件语义 | `"use client"` 本身不是证据 |
+| `INTERNAL_COPY_LEAK` | 内部 prompt、执行说明或模型过程已确认出现在公开页面 | PRD、注释、测试和历史报告不评分 |
+| `YMYL_UNSUPPORTED_CLAIM` | 公开页对健康、财务、法律或安全给出无依据承诺/保证，且可能影响重大决策 | 法律免责声明、一般信息和内部草稿不成立 |
 
-## P2：中影响问题
+## P2：已确认的页面质量、发现性或意图覆盖缺口
 
-| 检查项 | 代码证据 | 典型修复 |
+| Rule | P2 条件 | 降级/排除条件 |
 |---|---|---|
-| 内容薄 | 页面文本很少 | 补充定义、步骤、功能、场景、FAQ、案例 |
-| H2/H3 结构差 | 标题跳级或模块混乱 | 分门别类罗列关键词和用户问题 |
-| 内链少 | 页面几乎没有内部链接 | 增加上下级和相关页链接 |
-| 图片缺 alt | `<img>` 无 alt | 为重要图片写描述性 alt |
-| 关键词未覆盖 | 目标词不在可见文本中 | 在 title/H1/首段/H2/FAQ 自然覆盖 |
-| 关键词堆砌 | 密度 > 8% 或重复异常 | 改成语义相关词和真实解释 |
-| FAQ 缺失 | 长落地页无 FAQ | 补充真实问题和原创回答 |
+| `SITEMAP_COVERAGE_GAP` | 明确应索引的路由未进入实际 sitemap，且没有其他发现信号 | 只在源码未找到 sitemap 时是 `Unknown` |
+| `ORPHAN_ROUTE` | 已验证目标页没有任何有效站内入口 | 未完成全站内链覆盖时为 `Unknown` |
+| `DESCRIPTION_GAP` | description 缺失或失真，且页面搜索摘要/意图表达确实受损 | 仅缺标签不自动 P1；可为 P3 |
+| `CANONICAL_GAP` | 存在可验证重复 URL，且缺 canonical 加剧信号分散 | 无重复证据时至多 P3 |
+| `IMAGE_ALT_MISSING` | 承载内容的信息图像在当前 HTML 中没有 `alt` 属性 | `alt=""` 合法；源码 spread props 不确认 |
+| `INTENT_CONTENT_GAP` | 页面未回答其目标任务中的关键问题，证据来自页面类型和已映射关键词 | 禁止用固定字数阈值或关键词密度判断 |
+| `INTERNAL_LINK_GAP` | 重要上下级/相关页面之间缺少可验证的上下文入口 | 尚未覆盖全部相关页时为 `Candidate/Unknown` |
+| `STRUCTURED_DATA_INVALID` | 已输出的 JSON-LD 无效、与可见事实冲突或包含虚构评分/实体 | 单纯没有可选 schema 通常 P3 |
 
 ## P3：增强项
 
-| 检查项 | 代码证据 | 典型修复 |
-|---|---|---|
-| title/description 长度不佳 | 过短或过长 | 改为更利于点击的表达 |
-| OG/Twitter 不完整 | 缺 og:title/og:image | 增强分享预览 |
-| schema 可增强 | 无 JSON-LD | 按页面类型加真实 schema |
-| 图片尺寸/性能 | 无 width/height、未压缩 | 使用框架图片组件和压缩 |
-| robots 未声明 sitemap | robots.txt 无 Sitemap | 补充 sitemap 地址 |
+P3 用于不阻断索引、也没有证据表明显著损害意图满足的改进：
 
-## 页面类型专项
+- 无重复 URL 证据时建议自引用 canonical；
+- description 可改进，但页面仍能清晰表达任务；
+- title/摘要表达、OG/Twitter、favicon、manifest 可增强；
+- 可选且与真实可见内容一致的 JSON-LD；
+- 图片文件名、尺寸声明、压缩和非关键语义结构可改善；
+- 多个 H1 但主标题仍清楚，或标题层级可读性优化。
 
-### AdSense 审核专项（游戏站 / 工具站优先）
+## Source-only 与证据状态辅助规则
 
-核心问题：网站是否值得展示广告，还是像自动生成的低质套壳。
+以下 ID 只定义默认 impact；status 仍由 evidence gate 决定。源码存在模式最多为 `Candidate`，源码“未找到”与读取失败必须为 `Unknown`。
 
-P0：
+| 默认 impact | Rule IDs |
+|---|---|
+| P0 | `ROBOTS_DISALLOW_ALL`（仅源码候选；运行时全站阻断使用 `ROBOTS_SITE_BLOCK`） |
+| P1 | `CANONICAL_NOT_ABSOLUTE`、`NO_METADATA_SOURCE_FOUND`、`NO_CANONICAL_SOURCE_FOUND`、`SITEMAP_MISSING`、`SITEMAP_DOMAIN_MISMATCH`、`YMYL_COPY_REVIEW` |
+| P2 | `CANONICAL_NOT_HTTPS`、`HEADING_SKIP`、`KEYWORD_NOT_FOUND`、`LOW_INTERNAL_LINKS`、`MISSING_VIEWPORT`、`RENDERED_TEXT_COVERAGE_CANDIDATE`、`ROBOTS_MISSING`、`SITEMAP_EMPTY`、`SOURCE_IMG_WITHOUT_ALT` |
+| P3 | `CONTENT_DEPTH_REVIEW`、`DESCRIPTION_LENGTH`、`FAQ_MODULE_ABSENT`、`IMAGE_DIMENSIONS_MISSING`、`META_KEYWORDS_PRESENT`、`NOINDEX_SOURCE_SIGNAL`、`NO_SCHEMA_SOURCE_FOUND`、`OG_URL_CANONICAL_MISMATCH`、`ROBOTS_NO_SITEMAP`、`TITLE_LENGTH` |
+| P3 Unknown | `HTML_PARSE_FAILED`、`HTML_READ_FAILED`、`HTML_READ_TRUNCATED`、`ROUTES_FILE_UNREADABLE`、`SOURCE_IMG_ALT_UNKNOWN`、`SOURCE_READ_FAILED`、`SOURCE_READ_TRUNCATED`、`UNKNOWN_RULE` |
 
-- 站点不可访问、核心页面 4xx/5xx；
-- robots/noindex 阻止核心页面抓取或索引；
-- 缺 Contact、Privacy Policy、Terms of Service 等审核信任基础；
-- 明显侵权、成人、赌博、仇恨、暴力等政策红线；
-- sitemap/canonical 指向错误域名，导致审核和收录信号混乱。
+其中 `ROBOTS_MISSING`、`SITEMAP_MISSING`、三个 `NO_*_SOURCE_FOUND` 都是缺失搜索结果，固定为 `Unknown`；它们不能单独生成 Confirmed，也不能在已有 URL 证据时制造全局 coverage gap。
 
-P1：
+## 禁止使用的自动阈值
 
-- 游戏页只有 iframe，缺原创介绍、玩法说明、FAQ 和相关内容；
-- 工具页只有入口或营销口号，缺使用步骤、示例、限制、FAQ；
-- 首页、分类页、核心页正文很薄，只是封面图、卡片或按钮；
-- 整站视觉上像通用模板，没有与主打游戏/工具相关的风格；
-- 大量页面空白、占位、重复或自动生成痕迹明显。
+- 不存在“最佳关键词密度”，不得用 `3%–5%`、`8%` 或其他比例定级。
+- 不得用固定字符数把页面判为薄内容；先判断页面类型、用户任务和信息增益。
+- 缺 description、缺 canonical、多个 H1 都不是无条件 P1。
+- `"use client"` 不是 CSR-only 的证明；必须检查当前 HTTP/渲染 HTML。
 
-P2：
+解释依据：
 
-- 缺 Blog/Guides/Tutorials 内容区；
-- 审核阶段原创文章少于 5 篇；
-- 分类页缺文字说明和关键词分组；
-- 长尾关键词没有页面映射；
-- GSC 中 5-20 名、有展示但低点击的查询没有被优化；
-- 内链没有把首页、分类页、游戏/工具页、文章串起来。
+- [Google Search Central: January 2023 SEO office hours](https://developers.google.com/search/help/office-hours/2023/january?hl=en)
+- [Google Search Central: title links](https://developers.google.com/search/docs/appearance/title-link)
+- [Google Search Central: canonical consolidation](https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls)
 
-P3：
+## AdSense 与 P0–P3 的边界
 
-- 视觉 polish 可增强：配色、字体、图片、首屏状态更贴合主题；
-- OG/Twitter 预览、favicon、manifest 等品牌信号不完整；
-- schema 可增强：WebSite、Organization、BreadcrumbList、Article/BlogPosting、FAQPage；
-- 文章 freshness、作者/更新时间、相关内容模块可增强；
-- 额外信任信号不足，例如关于团队、更新日志、联系方式、内容来源说明。
-
-### 工具页 / SaaS 落地页
-
-必查模块：
-
-- Hero：主词、价值、工具入口；
-- How it works：至少 3 步；
-- Features：具体能力；
-- Use cases：按场景分组；
-- FAQ：真实问题；
-- Trust：证言、安全、隐私、品牌；
-- Related tools/pages：相关功能内链；
-- CTA：底部再次入口。
-
-### 目录站 / 图片站 / Coloring pages 类站点
-
-必查模块：
-
-- 首页 H1 承载主词；
-- H2 承载二级词；
-- H3 承载三级词；
-- 每个 H2/H3 有图片或条目预览；
-- 分类页和详情页互相链接；
-- 图片 alt 和文件名可读；
-- 分页、筛选、标签页 canonical 清晰。
-
-### 博客 / 内容站
-
-必查模块：
-
-- 标题匹配搜索意图；
-- 首段快速回答问题；
-- 作者、更新时间、引用来源；
-- TOC、H2/H3、列表/表格；
-- 相关文章和支柱页内链；
-- Article/BlogPosting schema；
-- 旧内容更新策略。
-
-### 电商 / 产品页
-
-必查模块：
-
-- 产品/分类唯一 title、description、H1；
-- 分类页有独特文本，不只是商品网格；
-- Faceted navigation 的 canonical/noindex/robots 策略清晰；
-- Product schema 只使用真实价格、库存、评分；
-- 缺货产品策略明确；
-- 面包屑和分类内链清晰。
+`adsense-requirements.md` 的 `Severity` 是 ADS 审核优先级，不是本报告的 SEO `impact`。ADS ID 的结论只使用 `Pass / Fail / Unknown / N/A`；如同一证据还要生成 SEO finding，再按本文件独立定 P0–P3，禁止机械映射。
