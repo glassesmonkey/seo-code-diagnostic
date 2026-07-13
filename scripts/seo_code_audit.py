@@ -1287,8 +1287,15 @@ def finding_from_issue(issue: Dict[str, str]) -> Dict[str, object]:
     read_unknown = code.startswith("SOURCE_READ_") or code.startswith("HTML_READ_")
     parse_unknown = code == "ROUTES_FILE_UNREADABLE" or code == "HTML_PARSE_FAILED"
     static_unknown = code == "SOURCE_IMG_ALT_UNKNOWN"
+    absence_unknown = code in {
+        "ROBOTS_MISSING",
+        "SITEMAP_MISSING",
+        "NO_METADATA_SOURCE_FOUND",
+        "NO_CANONICAL_SOURCE_FOUND",
+        "NO_SCHEMA_SOURCE_FOUND",
+    }
     return {
-        "status": "Unknown" if read_unknown or parse_unknown or static_unknown else "Candidate",
+        "status": "Unknown" if read_unknown or parse_unknown or static_unknown or absence_unknown else "Candidate",
         "impact": issue.get("severity", "P3"),
         "code": issue.get("code", "UNKNOWN_RULE"),
         "route": route,
@@ -2930,6 +2937,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         if verified_route and verified_route.get("coverage_status") == "verified" and verified_route.get("evidence_kind") in {
             "http",
             "current_rendered",
+        }:
+            continue
+        if finding_code in {
+            "ROBOTS_MISSING",
+            "SITEMAP_MISSING",
+            "NO_METADATA_SOURCE_FOUND",
+            "NO_CANONICAL_SOURCE_FOUND",
+            "NO_SCHEMA_SOURCE_FOUND",
         }:
             continue
         if not mapped_route and finding_code in {

@@ -136,6 +136,29 @@ class AuditCliTestCase(unittest.TestCase):
             )
             self.assertEqual(payload["summary"]["confirmed_by_impact"]["P2"], 0)
 
+    def test_source_absence_rules_are_unknown_not_candidates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "site"
+            page = root / "src" / "app" / "page.tsx"
+            page.parent.mkdir(parents=True)
+            page.write_text(
+                "export default function Page(){return <main><h1>Home</h1></main>}",
+                encoding="utf-8",
+            )
+
+            completed, payload = self.run_audit(root)
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            by_code = {item["code"]: item for item in payload["findings"]}
+            for code in {
+                "ROBOTS_MISSING",
+                "SITEMAP_MISSING",
+                "NO_METADATA_SOURCE_FOUND",
+                "NO_CANONICAL_SOURCE_FOUND",
+                "NO_SCHEMA_SOURCE_FOUND",
+            }:
+                self.assertEqual(by_code[code]["status"], "Unknown", code)
+
     def test_scan_allowlist_hard_excludes_private_and_generated_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "site"
