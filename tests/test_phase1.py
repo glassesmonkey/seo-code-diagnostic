@@ -48,10 +48,21 @@ class AuditCliTestCase(unittest.TestCase):
             rendered_root = workspace / "rendered"
             rendered_root.mkdir()
 
-            completed, payload = self.run_audit(
+            conflict, conflict_payload = self.run_audit(
                 root,
                 "--base-url",
                 "http://127.0.0.1:3000",
+                "--routes-file",
+                str(routes_file),
+                "--rendered-root",
+                str(rendered_root),
+            )
+            self.assertEqual(conflict.returncode, 2)
+            self.assertIsNone(conflict_payload)
+            self.assertIn("cannot be used together", conflict.stderr)
+
+            completed, payload = self.run_audit(
+                root,
                 "--routes-file",
                 str(routes_file),
                 "--rendered-root",
@@ -68,7 +79,7 @@ class AuditCliTestCase(unittest.TestCase):
                 {"scope", "coverage", "routes", "findings", "adsense"},
                 {key for key in payload if key in {"scope", "coverage", "routes", "findings", "adsense"}},
             )
-            self.assertEqual(payload["scope"]["base_url"], "http://127.0.0.1:3000")
+            self.assertEqual(payload["scope"]["base_url"], "")
             self.assertEqual(payload["scope"]["excludes"], ["private/**", "scratch/**"])
             self.assertFalse(payload["coverage"]["complete"])
             self.assertTrue(payload["coverage"]["gaps"])
@@ -277,10 +288,16 @@ class AuditCliTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "site"
             fixtures = {
+                "source.config.ts": (
+                    "import {defineDocs} from 'fumadocs-mdx/config';"
+                    "export const posts=defineDocs({dir:'content/posts'});"
+                ),
                 "src/app/page.tsx": "// internal prompt: do not show to users\nexport default function Page(){return <main>Public copy</main>}",
                 "src/app/terms/page.tsx": "export default function Terms(){return <main>This is not legal advice. Never rely on it as legal advice.</main>}",
                 "src/lib/prompts.ts": "export const note = 'internal prompt: do not show to users'",
                 "content/posts/public-leak.mdx": "# Article\n\nInternal prompt: do not show to users.",
+                "content/drafts/private-leak.mdx": "# Draft\n\nInternal prompt: do not show to users.",
+                "content/articles/unregistered-leak.mdx": "# Unregistered\n\nInternal prompt: do not show to users.",
             }
             for relative_path, content in fixtures.items():
                 path = root / relative_path
@@ -297,6 +314,27 @@ class AuditCliTestCase(unittest.TestCase):
             self.assertEqual(copy_findings[0]["code"], "INTERNAL_COPY_LEAK")
             self.assertEqual(copy_findings[0]["path_or_url"], "content/posts/public-leak.mdx")
             self.assertEqual(copy_findings[0]["status"], "Candidate")
+            self.assertNotIn("content/drafts/private-leak.mdx", json.dumps(payload["findings"]))
+            self.assertNotIn("content/articles/unregistered-leak.mdx", payload["scope"]["scanned_paths"])
+
+    def test_symlinked_files_outside_root_never_enter_scope_or_evidence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            root = workspace / "site"
+            source_dir = root / "src" / "app"
+            source_dir.mkdir(parents=True)
+            external = workspace / "outside.tsx"
+            external.write_text(
+                "export default function Page(){return <main>Internal prompt: do not show to users</main>}",
+                encoding="utf-8",
+            )
+            (source_dir / "page.tsx").symlink_to(external)
+
+            completed, payload = self.run_audit(root)
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertNotIn("src/app/page.tsx", payload["scope"]["scanned_paths"])
+            self.assertNotIn("outside.tsx", json.dumps(payload, ensure_ascii=False))
 
     def test_routes_file_owns_page_keywords_and_container_key_is_not_a_route(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -416,6 +454,11 @@ class AuditCliTestCase(unittest.TestCase):
             env_secret = "env-secret-1234567890"
             public_secret = "public-secret-1234567890"
             (root / ".env.development.local").write_text(f"API_KEY={env_secret}\n", encoding="utf-8")
+            (root / "source.config.ts").write_text(
+                "import {defineDocs} from 'fumadocs-mdx/config';"
+                "export const posts=defineDocs({dir:'content/posts'});",
+                encoding="utf-8",
+            )
             post = root / "content" / "posts" / "bad-copy.mdx"
             post.parent.mkdir(parents=True)
             post.write_text(
@@ -466,9 +509,11 @@ class AuditCliTestCase(unittest.TestCase):
             self.assertEqual(second.returncode, 0, second.stderr)
             self.assertFalse(output_path.is_relative_to(root))
             self.assertEqual(first_payload["scope"]["scanned_paths"], ["src/app/page.tsx"])
-            first_payload.pop("generated_at")
-            second_payload.pop("generated_at")
-            self.assertEqual(first_payload, second_payload)
+            self.assertRegex(first_payload["scope"]["provenance"]["result_hash"], r"^[0-9a-f]{64}$")
+            self.assertEqual(
+                first_payload["scope"]["provenance"]["result_hash"],
+                second_payload["scope"]["provenance"]["result_hash"],
+            )
 
     def test_truncated_html_is_unknown_and_does_not_create_missing_element_candidates(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -484,8 +529,27 @@ class AuditCliTestCase(unittest.TestCase):
             self.assertEqual(findings["HTML_READ_TRUNCATED"]["status"], "Unknown")
             self.assertEqual(findings["HTML_READ_TRUNCATED"]["evidence_kind"], "read_state")
             self.assertFalse(
-                {"MISSING_TITLE", "MISSING_H1", "MISSING_DESCRIPTION", "MISSING_CANONICAL"}
+                {"TITLE_MISSING", "MAIN_HEADING_UNCLEAR", "DESCRIPTION_GAP", "CANONICAL_GAP"}
                 & findings.keys()
+            )
+
+    def test_multiple_h1_alone_does_not_create_a_heading_finding(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "site"
+            page = root / "public" / "index.html"
+            page.parent.mkdir(parents=True)
+            page.write_text(
+                "<html><head><title>Clear page title</title></head>"
+                "<body><main><h1>Primary task</h1><section><h1>Supporting section</h1></section></main></body></html>",
+                encoding="utf-8",
+            )
+
+            completed, payload = self.run_audit(root)
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertNotIn(
+                "MAIN_HEADING_AMBIGUOUS",
+                {item["code"] for item in payload["findings"]},
             )
 
 
