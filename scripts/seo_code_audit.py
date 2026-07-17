@@ -23,24 +23,43 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
-import html
+import fnmatch
+import hashlib
+import ipaddress
 import json
 import os
 import re
+import socket
+import subprocess
 import sys
-from collections import Counter, defaultdict
+import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import dataclass, asdict
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urlparse
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from urllib.error import HTTPError, URLError
+from urllib.parse import urljoin, urlparse
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from adsense_report_validator import (  # noqa: E402
+    load_registry as load_adsense_registry,
+    summarize_items as summarize_adsense_items,
+    validate_assessments,
+)
 
 EXCLUDED_DIR_NAMES = {
     ".git",
     ".hg",
     ".svn",
     "node_modules",
-    ".next/cache",
+    ".next",
+    ".open-next",
+    ".source",
     ".nuxt",
     ".turbo",
     ".vercel",
@@ -49,18 +68,104 @@ EXCLUDED_DIR_NAMES = {
     "coverage",
     "vendor",
     "__pycache__",
+    ".agents",
+    ".agent",
+    ".claude",
+    ".codex",
+    "reports",
+    "report",
+    "output",
+    "outputs",
+    "dist",
+    "build",
+    "logs",
+    "log",
+    "uploads",
+    "upload",
+    "database",
+    "databases",
+    "data",
+    "db",
+    "migrations",
 }
 
 EXCLUDED_PARTS = {
     ".git",
     "node_modules",
-    ".next/cache",
+    ".next",
+    ".open-next",
+    ".source",
     ".nuxt",
     ".turbo",
     ".vercel",
     ".netlify",
     "coverage",
     "__pycache__",
+    ".agents",
+    ".agent",
+    ".claude",
+    ".codex",
+    "reports",
+    "report",
+    "output",
+    "outputs",
+    "dist",
+    "build",
+    "logs",
+    "log",
+    "uploads",
+    "upload",
+    "database",
+    "databases",
+    "data",
+    "db",
+    "migrations",
+}
+
+ALLOWED_TOP_LEVEL_DIRS = {
+    "src",
+    "app",
+    "pages",
+    "routes",
+    "content",
+    "posts",
+    "components",
+    "public",
+    "static",
+}
+
+ALLOWED_ROOT_FILES = {
+    "package.json",
+    "robots.txt",
+    "sitemap.xml",
+    "next.config.js",
+    "next.config.mjs",
+    "next.config.ts",
+    "nuxt.config.js",
+    "nuxt.config.ts",
+    "astro.config.mjs",
+    "astro.config.ts",
+    "vite.config.js",
+    "vite.config.ts",
+    "gatsby-config.js",
+    "svelte.config.js",
+    "remix.config.js",
+    "source.config.ts",
+    "source.config.js",
+    "source.config.mjs",
+}
+
+PRIVATE_FILE_SUFFIXES = {
+    ".bak",
+    ".db",
+    ".dump",
+    ".jsonl",
+    ".log",
+    ".ndjson",
+    ".parquet",
+    ".sql",
+    ".sqlite",
+    ".sqlite3",
 }
 
 HTML_EXTS = {".html", ".htm"}
@@ -68,6 +173,15 @@ SOURCE_EXTS = {".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro", ".md",
 TEXT_EXTS = HTML_EXTS | SOURCE_EXTS | {".json", ".xml", ".txt", ".config", ".mjs", ".cjs"}
 COPY_REVIEW_SOURCE_EXTS = {".jsx", ".tsx", ".vue", ".svelte", ".astro", ".md", ".mdx"}
 MAX_READ_BYTES = 700_000
+MAX_HTTP_BYTES = 2_000_000
+HTTP_TIMEOUT_SECONDS = 8
+MAX_EXTERNAL_HTTP_BYTES = 1_000_000
+EXTERNAL_HTTP_TIMEOUT_SECONDS = 5
+MAX_EXTERNAL_REDIRECTS = 3
+MAX_RECIPROCAL_DOMAINS = 20
+MAX_RECIPROCAL_LINK_SAMPLES = 10
+EXTERNAL_FETCH_WORKERS = 4
+QUALIFIED_REL_VALUES = {"nofollow", "sponsored", "ugc"}
 
 SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 
@@ -79,6 +193,40 @@ class Issue:
     file: str
     evidence: str
     recommendation: str
+
+
+@dataclass
+class ReadState:
+    text: str
+    truncated: bool
+    error: Optional[str] = None
+
+
+@dataclass
+class HTTPResult:
+    requested_url: str
+    status_code: Optional[int]
+    headers: Dict[str, str]
+    body: bytes
+    text: str
+    truncated: bool
+    error: Optional[str]
+    location: Optional[str]
+    final_url: Optional[str]
+    content_type: Optional[str]
+
+
+@dataclass
+class ExternalHTTPResult:
+    requested_url: str
+    final_url: Optional[str]
+    status_code: Optional[int]
+    content_type: Optional[str]
+    text: str
+    truncated: bool
+    error: Optional[str]
+    checked_urls: List[str]
+    content_hash: Optional[str]
 
 
 class SEOHTMLParser(HTMLParser):
@@ -94,6 +242,7 @@ class SEOHTMLParser(HTMLParser):
         self.meta: Dict[str, str] = {}
         self.meta_props: Dict[str, str] = {}
         self.canonicals: List[str] = []
+        self.base_href = ""
         self.links: List[Dict[str, str]] = []
         self.images: List[Dict[str, str]] = []
         self.iframes: List[Dict[str, str]] = []
@@ -101,6 +250,9 @@ class SEOHTMLParser(HTMLParser):
         self.text_parts: List[str] = []
         self.json_ld_count = 0
         self._script_type_stack: List[str] = []
+        self._script_data_stack: List[Optional[List[str]]] = []
+        self._anchor_stack: List[int] = []
+        self.json_ld_blocks: List[str] = []
 
     def _attrs(self, attrs: List[Tuple[str, Optional[str]]]) -> Dict[str, str]:
         return {k.lower(): (v or "") for k, v in attrs}
@@ -125,15 +277,31 @@ class SEOHTMLParser(HTMLParser):
             href = attr.get("href", "").strip()
             if "canonical" in rel and href:
                 self.canonicals.append(href)
+        elif tag == "base" and not self.base_href:
+            self.base_href = attr.get("href", "").strip()
         elif re.fullmatch(r"h[1-6]", tag):
             self.current_heading = {"level": int(tag[1]), "text": ""}
         elif tag == "a":
-            self.links.append({"href": attr.get("href", ""), "text": ""})
+            zone = "body"
+            for ancestor in reversed(self.stack[:-1]):
+                if ancestor in {"main", "nav", "footer", "aside", "body"}:
+                    zone = ancestor
+                    break
+            self.links.append(
+                {
+                    "href": attr.get("href", ""),
+                    "text": "",
+                    "rel": attr.get("rel", ""),
+                    "zone": zone,
+                }
+            )
+            self._anchor_stack.append(len(self.links) - 1)
         elif tag == "img":
             self.images.append(
                 {
                     "src": attr.get("src", ""),
                     "alt": attr.get("alt", ""),
+                    "alt_present": "1" if "alt" in attr else "",
                     "width": attr.get("width", ""),
                     "height": attr.get("height", ""),
                     "loading": attr.get("loading", ""),
@@ -146,6 +314,9 @@ class SEOHTMLParser(HTMLParser):
             self._script_type_stack.append(stype)
             if "ld+json" in stype:
                 self.json_ld_count += 1
+                self._script_data_stack.append([])
+            else:
+                self._script_data_stack.append(None)
             self.scripts.append({"src": attr.get("src", ""), "type": stype})
 
     def handle_startendtag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
@@ -163,6 +334,11 @@ class SEOHTMLParser(HTMLParser):
             self.current_heading = None
         elif tag == "script" and self._script_type_stack:
             self._script_type_stack.pop()
+            script_data = self._script_data_stack.pop() if self._script_data_stack else None
+            if script_data is not None:
+                self.json_ld_blocks.append("".join(script_data).strip())
+        elif tag == "a" and self._anchor_stack:
+            self._anchor_stack.pop()
 
         # Pop from the right until the matching tag if the markup is imperfect.
         for i in range(len(self.stack) - 1, -1, -1):
@@ -173,13 +349,15 @@ class SEOHTMLParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if not data or not data.strip():
             return
+        if self._script_data_stack and self._script_data_stack[-1] is not None:
+            self._script_data_stack[-1].append(data)
         if self.in_title:
             self.title_parts.append(data)
         if self.current_heading is not None:
             self.current_heading["text"] = str(self.current_heading.get("text", "")) + data
-        if self.links:
-            # This is approximate: enough to make anchor text visible in the JSON.
-            self.links[-1]["text"] = normalize_ws(self.links[-1].get("text", "") + " " + data)
+        if self._anchor_stack:
+            anchor = self.links[self._anchor_stack[-1]]
+            anchor["text"] = normalize_ws(anchor.get("text", "") + " " + data)
 
         hidden_context = {"head", "title", "script", "style", "svg", "canvas", "template"}
         if any(tag in hidden_context for tag in self.stack):
@@ -202,39 +380,579 @@ def normalize_ws(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
 
-def safe_read(path: Path) -> str:
-    data = path.read_bytes()[:MAX_READ_BYTES]
+def sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def link_rel_tokens(value: str) -> List[str]:
+    return sorted({token.lower() for token in re.split(r"[\s,]+", value or "") if token})
+
+
+def normalized_hostname(value: str) -> str:
+    host = (urlparse(value).hostname or value or "").strip().lower().rstrip(".")
+    try:
+        return host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return host
+
+
+def site_host_aliases(domain: Optional[str]) -> set:
+    if not domain:
+        return set()
+    host = normalized_hostname(domain)
+    if not host:
+        return set()
+    aliases = {host}
+    if host.startswith("www."):
+        aliases.add(host[4:])
+    else:
+        aliases.add("www." + host)
+    return aliases
+
+
+def extract_page_link_evidence(
+    parser: SEOHTMLParser,
+    page_url: str,
+    route: str,
+    domain: str,
+    *,
+    index_intent: str = "index",
+    indexability: str = "indexable",
+) -> Dict[str, object]:
+    internal_hosts = site_host_aliases(domain)
+    base_url = urljoin(page_url, parser.base_href) if parser.base_href else page_url
+    external_links: List[Dict[str, object]] = []
+    total_crawlable = 0
+    for link in parser.links:
+        href = normalize_ws(link.get("href", ""))
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        absolute = urljoin(base_url, href)
+        parsed = urlparse(absolute)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            continue
+        total_crawlable += 1
+        target_host = normalized_hostname(absolute)
+        if target_host in internal_hosts:
+            continue
+        rel_values = link_rel_tokens(link.get("rel", ""))
+        target_url = parsed._replace(fragment="").geturl()
+        external_links.append(
+            {
+                "target_url": target_url,
+                "target_host": target_host,
+                "anchor_text": normalize_ws(link.get("text", ""))[:160],
+                "rel": rel_values,
+                "zone": link.get("zone", "body"),
+                "qualified": bool(QUALIFIED_REL_VALUES & set(rel_values)),
+                "source_route": route,
+                "source_url": page_url,
+            }
+        )
+    return {
+        "route": route,
+        "source_url": page_url,
+        "title": parser.title,
+        "h1": [heading.get("text", "") for heading in parser.headings if heading.get("level") == 1],
+        "index_intent": index_intent,
+        "indexability": indexability,
+        "total_crawlable_links": total_crawlable,
+        "external_links": external_links,
+    }
+
+
+def validate_public_http_url(
+    value: str,
+    *,
+    resolver: Callable[..., object] = socket.getaddrinfo,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return a normalized public HTTP URL or a stable safety error."""
+    raw = normalize_ws(value)
+    if not raw or any(ord(char) < 32 for char in raw):
+        return None, "invalid_url"
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return None, "scheme_or_host_invalid"
+    if parsed.username is not None or parsed.password is not None:
+        return None, "userinfo_forbidden"
+    try:
+        port = parsed.port
+    except ValueError:
+        return None, "port_invalid"
+    if port not in {None, 80, 443}:
+        return None, "port_forbidden"
+    host = normalized_hostname(parsed.hostname)
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return None, "ip_literal_forbidden"
+
+    lookup_port = port or (443 if parsed.scheme.lower() == "https" else 80)
+    try:
+        addresses = resolver(host, lookup_port, type=socket.SOCK_STREAM)
+    except (OSError, socket.gaierror):
+        return None, "dns_resolution_failed"
+    if not addresses:
+        return None, "dns_resolution_failed"
+    for address in addresses:
+        try:
+            resolved = ipaddress.ip_address(str(address[4][0]).split("%", 1)[0])
+        except (ValueError, IndexError, TypeError):
+            return None, "dns_address_invalid"
+        if not resolved.is_global:
+            return None, "private_address_forbidden"
+
+    hostname = host
+    if ":" in hostname:
+        hostname = f"[{hostname}]"
+    netloc = hostname
+    if port and port != (443 if parsed.scheme.lower() == "https" else 80):
+        netloc += f":{port}"
+    normalized = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=netloc,
+        fragment="",
+    ).geturl()
+    return normalized, None
+
+
+def _external_request_once(url: str) -> HTTPResult:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "seo-code-diagnostic/2 reciprocal-link-check",
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+        },
+    )
+    opener = build_opener(ProxyHandler({}), NoRedirectHandler())
+    response = None
+    try:
+        response = opener.open(request, timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS)
+    except HTTPError as exc:
+        response = exc
+    except (URLError, TimeoutError, OSError) as exc:
+        return HTTPResult(url, None, {}, b"", "", False, type(exc).__name__, None, None, None)
+    try:
+        status = int(response.getcode())
+        headers = {str(key).lower(): str(value) for key, value in response.headers.items()}
+        data = response.read(MAX_EXTERNAL_HTTP_BYTES + 1)
+        truncated = len(data) > MAX_EXTERNAL_HTTP_BYTES
+        data = data[:MAX_EXTERNAL_HTTP_BYTES]
+        content_type = headers.get("content-type")
+        location = headers.get("location")
+        final_url = urljoin(url, location) if location and 300 <= status < 400 else response.geturl()
+        return HTTPResult(
+            url,
+            status,
+            headers,
+            data,
+            decode_http_body(data, content_type),
+            truncated,
+            None,
+            location,
+            final_url,
+            content_type,
+        )
+    except (OSError, ValueError) as exc:
+        return HTTPResult(url, None, {}, b"", "", False, type(exc).__name__, None, None, None)
+    finally:
+        if response is not None:
+            response.close()
+
+
+def fetch_public_http(
+    value: str,
+    *,
+    resolver: Callable[..., object] = socket.getaddrinfo,
+    request_once: Callable[[str], HTTPResult] = _external_request_once,
+) -> ExternalHTTPResult:
+    """Fetch one public page while validating the initial URL and every redirect."""
+    current, error = validate_public_http_url(value, resolver=resolver)
+    if error or not current:
+        return ExternalHTTPResult(value, None, None, None, "", False, error, [], None)
+
+    checked: List[str] = []
+    for redirect_count in range(MAX_EXTERNAL_REDIRECTS + 1):
+        checked.append(current)
+        result = request_once(current)
+        if result.error or result.status_code is None:
+            return ExternalHTTPResult(
+                value,
+                result.final_url,
+                result.status_code,
+                result.content_type,
+                result.text,
+                result.truncated,
+                result.error or "external_request_failed",
+                checked,
+                sha256_text(result.text) if result.text else None,
+            )
+        if 300 <= result.status_code < 400 and result.location:
+            if redirect_count >= MAX_EXTERNAL_REDIRECTS:
+                return ExternalHTTPResult(
+                    value, current, result.status_code, result.content_type, "", False,
+                    "redirect_limit_exceeded", checked, None,
+                )
+            next_url = urljoin(current, result.location)
+            normalized, redirect_error = validate_public_http_url(next_url, resolver=resolver)
+            if redirect_error or not normalized:
+                return ExternalHTTPResult(
+                    value, current, result.status_code, result.content_type, "", False,
+                    f"redirect_{redirect_error or 'invalid_url'}", checked, None,
+                )
+            current = normalized
+            continue
+        final_url = result.final_url or current
+        normalized_final, final_error = validate_public_http_url(final_url, resolver=resolver)
+        if final_error or not normalized_final:
+            return ExternalHTTPResult(
+                value, current, result.status_code, result.content_type, "", False,
+                f"final_{final_error or 'invalid_url'}", checked, None,
+            )
+        return ExternalHTTPResult(
+            value,
+            normalized_final,
+            result.status_code,
+            result.content_type,
+            result.text,
+            result.truncated,
+            None,
+            checked,
+            sha256_text(result.text) if result.text else None,
+        )
+    return ExternalHTTPResult(value, current, None, None, "", False, "redirect_limit_exceeded", checked, None)
+
+
+def empty_link_analysis(reason: str) -> Dict[str, object]:
+    return {
+        "status": "not_run",
+        "reason": reason,
+        "candidate_domain_total": 0,
+        "selected_domain_total": 0,
+        "skipped_domain_total": 0,
+        "verified_page_total": 0,
+        "reciprocal_domain_total": 0,
+        "targets": [],
+        "gaps": [],
+    }
+
+
+def _reverse_links(html: str, page_url: str, site_domain: str) -> List[Dict[str, object]]:
+    parser = parse_runtime_html(html)
+    site_hosts = site_host_aliases(site_domain)
+    base_url = urljoin(page_url, parser.base_href) if parser.base_href else page_url
+    matches: List[Dict[str, object]] = []
+    for link in parser.links:
+        href = normalize_ws(link.get("href", ""))
+        if not href:
+            continue
+        absolute = urljoin(base_url, href)
+        parsed = urlparse(absolute)
+        if parsed.scheme.lower() not in {"http", "https"} or normalized_hostname(absolute) not in site_hosts:
+            continue
+        rel_values = link_rel_tokens(link.get("rel", ""))
+        matches.append(
+            {
+                "url": parsed._replace(fragment="").geturl(),
+                "anchor_text": normalize_ws(link.get("text", ""))[:160],
+                "rel": rel_values,
+                "zone": link.get("zone", "body"),
+                "qualified": bool(QUALIFIED_REL_VALUES & set(rel_values)),
+                "checked_page": page_url,
+            }
+        )
+    return matches[:MAX_RECIPROCAL_LINK_SAMPLES]
+
+
+def analyze_reciprocal_links(
+    pages: List[Dict[str, object]],
+    domain: str,
+    *,
+    fetcher: Callable[[str], ExternalHTTPResult] = fetch_public_http,
+) -> Tuple[Dict[str, object], List[Dict[str, object]]]:
+    """Record bounded reciprocal-link evidence and flag only composite network patterns."""
+    by_host: Dict[str, Dict[str, object]] = {}
+    for page in pages:
+        for link in page.get("external_links", []):
+            if not isinstance(link, dict) or link.get("qualified"):
+                continue
+            host = normalized_hostname(str(link.get("target_host") or ""))
+            if not host:
+                continue
+            bucket = by_host.setdefault(host, {"host": host, "forward_links": []})
+            samples = bucket["forward_links"]
+            if len(samples) < MAX_RECIPROCAL_LINK_SAMPLES:
+                samples.append(dict(link))
+
+    candidate_hosts = sorted(by_host)
+    selected_hosts = candidate_hosts[:MAX_RECIPROCAL_DOMAINS]
+    gaps: List[Dict[str, object]] = []
+    targets_by_final_host: Dict[str, Dict[str, object]] = {}
+    verified_page_total = 0
+
+    for host in selected_hosts:
+        forward_links = list(by_host[host]["forward_links"])
+        target_url = str(forward_links[0].get("target_url") or "")
+        checked_results: List[ExternalHTTPResult] = []
+        primary = fetcher(target_url)
+        checked_results.append(primary)
+        result = primary
+        final_url = result.final_url or target_url
+        final_host = normalized_hostname(final_url) or host
+        target = targets_by_final_host.setdefault(
+            final_host,
+            {
+                "target_host": final_host,
+                "forward_links": [],
+                "checked_urls": [],
+                "reverse_status": "unknown",
+                "reverse_links": [],
+                "reverse_follow": False,
+                "signals": [],
+            },
+        )
+        for sample in forward_links:
+            if len(target["forward_links"]) < MAX_RECIPROCAL_LINK_SAMPLES:
+                target["forward_links"].append(sample)
+
+        def add_gap(reason: str, external_result: ExternalHTTPResult) -> None:
+            gaps.append(
+                {
+                    "target_host": final_host,
+                    "reason": reason,
+                    "path_or_url": external_result.requested_url,
+                }
+            )
+
+        if result.error or result.status_code is None:
+            add_gap("external_request_failed", result)
+            continue
+        if result.truncated:
+            add_gap("external_body_truncated", result)
+            continue
+        if result.status_code != 200:
+            add_gap("external_http_status", result)
+            continue
+        if not result.content_type or "html" not in result.content_type.lower():
+            add_gap("external_non_html", result)
+            continue
+
+        verified_page_total += 1
+        target["checked_urls"].extend(url for url in result.checked_urls if url not in target["checked_urls"])
+        reverse = _reverse_links(result.text, final_url, domain)
+        parsed_final = urlparse(final_url)
+        home_url = f"{parsed_final.scheme}://{parsed_final.netloc}/"
+        if not reverse and final_url.rstrip("/") != home_url.rstrip("/"):
+            home = fetcher(home_url)
+            checked_results.append(home)
+            if home.error or home.status_code is None:
+                add_gap("external_request_failed", home)
+            elif home.truncated:
+                add_gap("external_body_truncated", home)
+            elif home.status_code != 200:
+                add_gap("external_http_status", home)
+            elif not home.content_type or "html" not in home.content_type.lower():
+                add_gap("external_non_html", home)
+            else:
+                verified_page_total += 1
+                target["checked_urls"].extend(url for url in home.checked_urls if url not in target["checked_urls"])
+                reverse = _reverse_links(home.text, home.final_url or home_url, domain)
+
+        if reverse:
+            target["reverse_status"] = "reverse_link_observed"
+            existing = {(item.get("url"), item.get("checked_page")) for item in target["reverse_links"]}
+            for match in reverse:
+                key = (match.get("url"), match.get("checked_page"))
+                if key not in existing and len(target["reverse_links"]) < MAX_RECIPROCAL_LINK_SAMPLES:
+                    target["reverse_links"].append(match)
+                    existing.add(key)
+            target["reverse_follow"] = any(not item.get("qualified") for item in target["reverse_links"])
+        elif not any(item.error or item.truncated or item.status_code != 200 for item in checked_results):
+            target["reverse_status"] = "not_observed_on_checked_pages"
+
+    targets = [targets_by_final_host[key] for key in sorted(targets_by_final_host)]
+    reciprocal_targets = [item for item in targets if item.get("reverse_status") == "reverse_link_observed"]
+    follow_targets = [item for item in reciprocal_targets if item.get("reverse_follow")]
+
+    affected_routes = sorted(
+        {
+            str(link.get("source_route"))
+            for target in follow_targets
+            for link in target.get("forward_links", [])
+            if link.get("source_route")
+        }
+    )
+    repeated_hosts = [
+        target
+        for target in follow_targets
+        if len({str(link.get("source_route")) for link in target.get("forward_links", [])}) >= 3
+        and any(link.get("zone") in {"footer", "nav", "aside"} for link in target.get("forward_links", []))
+    ]
+    partner_routes = {
+        str(page.get("route"))
+        for page in pages
+        if re.search(r"\b(?:link\s+partners?|partners?|resources?)\b", str(page.get("title") or ""), flags=re.I)
+        and len(page.get("external_links", [])) >= 3
+    }
+    partner_hosts = [
+        target
+        for target in follow_targets
+        if any(
+            str(link.get("source_route")) in partner_routes
+            for link in target.get("forward_links", [])
+        )
+    ]
+    signals: List[str] = []
+    pattern_hosts: List[Dict[str, object]] = []
+    if len(repeated_hosts) >= 3:
+        signals.append("sitewide_template")
+        pattern_hosts = repeated_hosts
+    if len(partner_hosts) >= 3:
+        signals.append("partner_page")
+        pattern_hosts = list({str(item["target_host"]): item for item in pattern_hosts + partner_hosts}.values())
+
+    findings: List[Dict[str, object]] = []
+    if signals and len(pattern_hosts) >= 3:
+        affected_hosts = sorted(str(item["target_host"]) for item in pattern_hosts)
+        pattern_routes = sorted(
+            {
+                str(link.get("source_route"))
+                for target in pattern_hosts
+                for link in target.get("forward_links", [])
+                if link.get("source_route")
+            }
+        )
+        evidence = (
+            f"本轮确认 {len(affected_hosts)} 个站外主机与本站存在双方 follow 链接，"
+            f"并形成 {', '.join(signals)} 模式"
+        )
+        findings.append(
+            {
+                "code": "RECIPROCAL_LINK_NETWORK_PATTERN",
+                "status": "Confirmed",
+                "impact": "P2",
+                "route": None,
+                "route_kind": "public",
+                "index_intent": "unknown",
+                "indexability": "unknown",
+                "runtime_reachable": True,
+                "status_code": 200,
+                "evidence_kind": "http",
+                "path_or_url": domain,
+                "provenance": {
+                    "mode": "runtime_reciprocal",
+                    "signals": signals,
+                    "content_hash": sha256_text(evidence + "|" + "|".join(affected_hosts + pattern_routes)),
+                },
+                "evidence": evidence,
+                "recommendation": "复核这些互链是否为真实编辑关系；不需要传递排名信号的链接使用 nofollow、sponsored 或 ugc。",
+                "affected_routes": pattern_routes,
+                "affected_hosts": affected_hosts,
+            }
+        )
+
+    analysis = {
+        "status": "partial" if gaps or len(candidate_hosts) > len(selected_hosts) else "complete",
+        "reason": None,
+        "candidate_domain_total": len(candidate_hosts),
+        "selected_domain_total": len(selected_hosts),
+        "skipped_domain_total": max(0, len(candidate_hosts) - len(selected_hosts)),
+        "verified_page_total": verified_page_total,
+        "reciprocal_domain_total": len(reciprocal_targets),
+        "targets": targets,
+        "gaps": sorted(gaps, key=lambda item: (str(item.get("target_host")), str(item.get("reason")))),
+    }
+    return analysis, findings
+
+
+def read_text_state(path: Path) -> ReadState:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        return ReadState(text="", truncated=False, error=type(exc).__name__)
+    truncated = len(data) > MAX_READ_BYTES
+    data = data[:MAX_READ_BYTES]
     for enc in ("utf-8", "utf-8-sig", "latin-1"):
         try:
-            return data.decode(enc)
+            return ReadState(text=data.decode(enc), truncated=truncated)
         except UnicodeDecodeError:
             continue
-    return data.decode("utf-8", errors="ignore")
+    return ReadState(text=data.decode("utf-8", errors="ignore"), truncated=truncated)
 
 
-def should_skip(path: Path, root: Path) -> bool:
+def safe_read(path: Path) -> str:
+    state = read_text_state(path)
+    if state.error:
+        raise OSError(state.error)
+    return state.text
+
+
+def should_skip(path: Path, root: Path, exclude_patterns: Iterable[str] = (), output_paths: Iterable[Path] = ()) -> bool:
+    if path.is_symlink():
+        return True
     try:
         rel_parts = path.relative_to(root).parts
     except ValueError:
         rel_parts = path.parts
     for part in rel_parts:
-        if part in EXCLUDED_PARTS:
+        if part.lower() in EXCLUDED_PARTS:
             return True
+    name_lower = path.name.lower()
+    if name_lower == "agents.md" or name_lower == ".dev.vars" or name_lower.startswith(".env"):
+        return True
+    if path.suffix.lower() in PRIVATE_FILE_SUFFIXES:
+        return True
+    rel_value = "/".join(rel_parts)
+    if any(fnmatch.fnmatch(rel_value, pattern) or Path(rel_value).match(pattern) for pattern in exclude_patterns):
+        return True
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(root.resolve())
+    except (OSError, ValueError):
+        return True
+    if any(resolved == output.resolve() for output in output_paths):
+        return True
     return False
 
 
-def iter_files(root: Path) -> Iterable[Path]:
+def is_allowlisted(path: Path, root: Path) -> bool:
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return False
+    if not parts:
+        return False
+    if len(parts) == 1:
+        return parts[0].lower() in ALLOWED_ROOT_FILES or (
+            path.suffix.lower() in HTML_EXTS and path.stem.lower() == "index"
+        )
+    return parts[0].lower() in ALLOWED_TOP_LEVEL_DIRS
+
+
+def iter_files(
+    root: Path,
+    exclude_patterns: Iterable[str] = (),
+    output_paths: Iterable[Path] = (),
+) -> Iterable[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         current = Path(dirpath)
         # Mutate dirnames so os.walk does not descend into excluded dirs.
-        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES and d not in EXCLUDED_PARTS]
-        if should_skip(current, root):
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d.lower() not in EXCLUDED_DIR_NAMES
+            and d.lower() not in EXCLUDED_PARTS
+            and not (current / d).is_symlink()
+        ]
+        if should_skip(current, root, exclude_patterns, output_paths):
             continue
         for filename in filenames:
             path = current / filename
-            if should_skip(path, root):
+            if should_skip(path, root, exclude_patterns, output_paths):
                 continue
-            if path.is_file():
+            if path.is_file() and is_allowlisted(path, root):
                 yield path
 
 
@@ -287,37 +1005,123 @@ def escape_md(value: object) -> str:
     return s
 
 
+SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token)\b\s*[:=]\s*)(?:[\"']?)([^\s,;\"'<>}\]]+)"
+)
+SECRET_TOKEN_RE = re.compile(r"\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b")
+BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
+SENSITIVE_REPORT_KEY_RE = re.compile(
+    r"(?i)^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|password|secret|token)$"
+)
+
+
+def redact_sensitive_text(value: str) -> str:
+    value = SECRET_ASSIGNMENT_RE.sub(lambda match: match.group(1) + "[REDACTED]", value)
+    value = SECRET_TOKEN_RE.sub("[REDACTED]", value)
+    value = BEARER_RE.sub("Bearer [REDACTED]", value)
+    return value
+
+
+def redact_report_value(value: object, key: Optional[str] = None) -> object:
+    if key and SENSITIVE_REPORT_KEY_RE.match(key) and value is not None:
+        return "[REDACTED]"
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    if isinstance(value, list):
+        return [redact_report_value(item) for item in value]
+    if isinstance(value, dict):
+        return {item_key: redact_report_value(item_value, str(item_key)) for item_key, item_value in value.items()}
+    return value
+
+
 def add_issue(issues: List[Issue], severity: str, code: str, file: str, evidence: str, recommendation: str) -> None:
     issues.append(Issue(severity, code, file, normalize_ws(evidence), normalize_ws(recommendation)))
 
 
-def add_adsense_check(
-    checks: List[Dict[str, object]],
-    severity: str,
-    item: str,
-    status: str,
-    evidence: str,
-    recommendation: str,
-    ids: Optional[List[str]] = None,
-) -> None:
-    checks.append(
-        {
-            "ids": ids or [],
-            "severity": severity,
-            "item": normalize_ws(item),
-            "status": status,
-            "evidence": normalize_ws(evidence),
-            "recommendation": normalize_ws(recommendation),
+def adsense_requirements() -> List[Dict[str, str]]:
+    try:
+        return load_adsense_registry()
+    except (OSError, UnicodeError, ValueError):
+        return []
+
+
+def adsense_requirement_ids() -> List[str]:
+    return [item["id"] for item in adsense_requirements()]
+
+
+def build_adsense_contract(
+    enabled: bool,
+    routes: List[Dict[str, object]],
+    coverage: Dict[str, object],
+    assessments: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    requirements = adsense_requirements()
+    requirement_ids = [item["id"] for item in requirements]
+    empty_counts = {status: 0 for status in ["Pass", "Fail", "Unknown", "N/A"]}
+    if not enabled:
+        return {
+            "enabled": False,
+            "status": "N/A",
+            "requirement_total": len(requirements),
+            "reported_total": 0,
+            "missing_ids": [],
+            "status_counts": empty_counts,
+            "items": [],
+            "article_count": 0,
+            "article_routes": [],
+            "complete": False,
+            "conclusion": None,
+            "summary": empty_counts,
+            "readiness": None,
+            "remediation_order": [],
         }
-    )
 
-
-def format_ads_ids(ids: object) -> str:
-    if not ids:
-        return ""
-    if isinstance(ids, list):
-        return ", ".join(str(x) for x in ids)
-    return str(ids)
+    assessment_by_id = {
+        str(item.get("id")): item
+        for item in (assessments or {}).get("items", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    items = []
+    for requirement in requirements:
+        assessment = assessment_by_id.get(requirement["id"])
+        if assessment is None:
+            assessment = {
+                "id": requirement["id"],
+                "status": "Unknown",
+                "evidence": "当前审计没有足以确认该要求的直接证据。",
+                "next_action": requirement["how_to_verify"],
+                "evidence_kind": "coverage_gap",
+                "path_or_url": None,
+                "evidence_ref": None,
+                "provenance": {"mode": "coverage-gap"},
+                "effort": "Unknown",
+                "applicability_reason": None,
+            }
+        items.append({**assessment, **requirement})
+    verified_article_routes = [
+        str(route.get("route"))
+        for route in routes
+        if route.get("is_article") is True
+        and route.get("registry_status") == "registered"
+        and "registry" in route.get("sources", [])
+        and route.get("runtime_reachable") is True
+        and route.get("status_code") == 200
+        and route.get("coverage_status") == "verified"
+        and route.get("evidence_kind") in {"http", "current_rendered"}
+    ]
+    reported_ids = {str(item.get("id")) for item in items}
+    missing_ids = [ads_id for ads_id in requirement_ids if ads_id not in reported_ids]
+    aggregation = summarize_adsense_items(items, coverage.get("complete") is True)
+    return {
+        "enabled": True,
+        "requirement_total": len(requirements),
+        "reported_total": len(items),
+        "missing_ids": missing_ids,
+        "items": items,
+        "article_count": len(verified_article_routes),
+        "article_routes": sorted(verified_article_routes),
+        **aggregation,
+    }
 
 
 YMYL_TOPIC_PATTERNS = [
@@ -402,64 +1206,47 @@ def audit_copy_text(text: str, file_rel: str, confidence: str) -> List[Issue]:
     return issues
 
 
+def visible_copy_source(text: str, suffix: str) -> str:
+    if suffix.lower() in {".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte", ".astro"}:
+        text = re.sub(r"\{?\s*/\*.*?\*/\s*\}?", " ", text, flags=re.S)
+        text = re.sub(r"(^|\s)//[^\n]*", r"\1", text)
+    if suffix.lower() in {".md", ".mdx"}:
+        text = re.sub(r"<!--.*?-->", " ", text, flags=re.S)
+    return text
+
+
+def mapped_public_route(file_rel: str) -> Optional[str]:
+    route = source_route(file_rel)
+    if route:
+        return route
+    value = file_rel.replace("\\", "/")
+    match = re.search(r"(?:^|/)content/(?:posts?|articles?|blog)/(.+?)\.(?:md|mdx|html?)$", value, flags=re.I)
+    if match:
+        return "/blog/" + match.group(1).strip("/")
+    match = re.search(r"(?:^|/)posts/(.+?)\.(?:md|mdx|html?)$", value, flags=re.I)
+    if match:
+        return "/blog/" + match.group(1).strip("/")
+    return None
+
+
+def legal_policy_route(route: Optional[str]) -> bool:
+    return bool(route and re.search(r"(?:^|/)(?:terms|privacy|legal|disclaimer)(?:/|$)", route, flags=re.I))
+
+
 def rel_posix(path: Path, root: Path) -> str:
     return rel(path, root).replace(os.sep, "/")
 
 
-def path_contains_token(value: str, tokens: List[str]) -> bool:
-    value_l = value.lower().replace("_", "-")
-    return any(token in value_l for token in tokens)
-
-
-def find_likely_pages(all_files: List[Path], root: Path, tokens: List[str]) -> List[str]:
-    matches: List[str] = []
-    for path in all_files:
-        if path.suffix.lower() not in TEXT_EXTS:
-            continue
-        file_rel = rel_posix(path, root).lower()
-        if path_contains_token(file_rel, tokens):
-            matches.append(rel_posix(path, root))
-    return sorted(set(matches))
-
-
-def find_likely_article_files(all_files: List[Path], root: Path) -> List[str]:
-    article_dirs = {
-        "blog",
-        "blogs",
-        "post",
-        "posts",
-        "article",
-        "articles",
-        "guide",
-        "guides",
-        "news",
-        "content",
-        "tutorial",
-        "tutorials",
-    }
-    article_exts = {".md", ".mdx", ".html", ".htm", ".astro", ".svelte", ".vue", ".tsx", ".jsx"}
-    skip_names = {"index", "layout", "template", "component", "components"}
-    matches: List[str] = []
-    for path in all_files:
-        if path.suffix.lower() not in article_exts:
-            continue
-        file_rel = rel_posix(path, root)
-        parts = [part.lower() for part in file_rel.split("/")]
-        if not any(part in article_dirs for part in parts):
-            continue
-        if path.stem.lower() in skip_names:
-            continue
-        matches.append(file_rel)
-    return sorted(set(matches))
-
-
-def is_adsense_core_page(file_rel: str) -> bool:
-    path = file_rel.lower().replace("\\", "/")
-    name = Path(path).name
-    if name in {"index.html", "index.htm"}:
-        return True
-    core_markers = ["/game", "/games", "/tool", "/tools", "/category", "/categories", "/play", "/apps"]
-    return any(marker in path for marker in core_markers)
+def is_user_content_file(path: Path, root: Path) -> bool:
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return False
+    return bool(
+        parts
+        and parts[0].lower() in {"content", "posts"}
+        and path.suffix.lower() in {".md", ".mdx", ".html", ".htm", ".json"}
+    )
 
 
 # ---------- project detection ----------
@@ -532,7 +1319,13 @@ def detect_project(root: Path, all_files: List[Path]) -> Dict[str, object]:
         "app/sitemap.ts",
         "app/sitemap.js",
         "src/app/robots.ts",
+        "src/app/robots.js",
+        "src/app/robots.tsx",
+        "src/app/robots.jsx",
         "src/app/sitemap.ts",
+        "src/app/sitemap.js",
+        "src/app/sitemap.tsx",
+        "src/app/sitemap.jsx",
     ]:
         if (root / candidate).exists():
             seo_files.append(candidate)
@@ -549,14 +1342,16 @@ def detect_project(root: Path, all_files: List[Path]) -> Dict[str, object]:
 # ---------- HTML audit ----------
 
 
-def parse_html(path: Path) -> SEOHTMLParser:
+def parse_html(path: Path) -> Tuple[SEOHTMLParser, ReadState, Optional[str]]:
     parser = SEOHTMLParser()
+    read_state = read_text_state(path)
+    if read_state.error:
+        return parser, read_state, None
     try:
-        parser.feed(safe_read(path))
-    except Exception:
-        # HTMLParser is forgiving, but keep going if weird input appears.
-        pass
-    return parser
+        parser.feed(read_state.text)
+    except Exception as exc:
+        return parser, read_state, type(exc).__name__
+    return parser, read_state, None
 
 
 def classify_links(links: List[Dict[str, str]], domain: Optional[str]) -> Tuple[int, int, int]:
@@ -579,7 +1374,7 @@ def classify_links(links: List[Dict[str, str]], domain: Optional[str]) -> Tuple[
 
 
 def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: List[str]) -> Dict[str, object]:
-    parser = parse_html(path)
+    parser, read_state, parse_error = parse_html(path)
     file_rel = rel(path, root)
     issues: List[Issue] = []
     text = parser.text
@@ -591,22 +1386,62 @@ def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: Lis
     viewport = parser.meta.get("viewport", "")
     h1s = [h for h in parser.headings if h.get("level") == 1]
     internal_links, external_links, empty_links = classify_links(parser.links, domain)
-    missing_alt = [img for img in parser.images if not normalize_ws(img.get("alt", ""))]
+    missing_alt = [img for img in parser.images if not img.get("alt_present")]
     missing_dims = [img for img in parser.images if not img.get("width") or not img.get("height")]
     script_count = len(parser.scripts)
     canonical = parser.canonicals[0] if parser.canonicals else ""
     og_url = parser.meta_props.get("og:url", "")
 
+    page_result: Dict[str, object] = {
+        "file": file_rel,
+        "title": title,
+        "description": description,
+        "canonical": canonical,
+        "robots": robots,
+        "h1_count": len(h1s),
+        "h1": [h.get("text", "") for h in h1s],
+        "heading_counts": dict(Counter(int(h.get("level", 0)) for h in parser.headings)),
+        "text_chars": text_chars,
+        "word_units": words,
+        "image_count": len(parser.images),
+        "images_missing_alt": len(missing_alt),
+        "iframe_count": len(parser.iframes),
+        "internal_links": internal_links,
+        "external_links": external_links,
+        "empty_or_special_links": empty_links,
+        "script_count": script_count,
+        "json_ld_count": parser.json_ld_count,
+        "keyword_density": [],
+        "issues": [],
+    }
+
+    if read_state.error or read_state.truncated or parse_error:
+        if read_state.error:
+            code = "HTML_READ_FAILED"
+            evidence = f"读取失败：{read_state.error}"
+            recommendation = "修复读取权限后重新扫描；当前不能依据空解析结果判断页面缺失元素。"
+        elif read_state.truncated:
+            code = "HTML_READ_TRUNCATED"
+            evidence = f"文件超过 {MAX_READ_BYTES} bytes，HTML 读取被截断"
+            recommendation = "提供可完整读取的本轮 HTML 后重新扫描；当前不能依据部分内容判断页面缺失元素。"
+        else:
+            code = "HTML_PARSE_FAILED"
+            evidence = f"HTML 解析失败：{parse_error}"
+            recommendation = "修复或重新生成 HTML 后扫描；当前不能依据解析失败判断页面缺失元素。"
+        add_issue(issues, "P3", code, file_rel, evidence, recommendation)
+        page_result["issues"] = [asdict(issue) for issue in issues]
+        return page_result
+
     if re.search(r"\bnoindex\b", robots, flags=re.I):
-        add_issue(issues, "P0", "NOINDEX", file_rel, f"robots meta = {robots}", "确认该页面是否真的不需要收录；核心 SEO 页面不要设置 noindex。")
+        add_issue(issues, "P3", "NOINDEX_SOURCE_SIGNAL", file_rel, f"robots meta = {robots}", "先确认页面索引意图与运行时 robots；只有目标页冲突才升级。")
 
     if not title:
-        add_issue(issues, "P1", "MISSING_TITLE", file_rel, "未找到 <title>", "为每个可索引页面设置唯一 title，包含主搜索意图并吸引点击。")
+        add_issue(issues, "P1", "TITLE_MISSING", file_rel, "未找到 <title>", "为每个可索引页面设置唯一 title，包含主搜索意图并吸引点击。")
     elif len(title) < 15 or len(title) > 70:
         add_issue(issues, "P3", "TITLE_LENGTH", file_rel, f"title 长度 {len(title)}: {title}", "检查标题是否过短、过长或会在搜索结果中被截断。")
 
     if not description:
-        add_issue(issues, "P1", "MISSING_DESCRIPTION", file_rel, "未找到 meta description", "为核心页面添加能扩展 title、说明价值点并促进点击的 meta description。")
+        add_issue(issues, "P3", "DESCRIPTION_GAP", file_rel, "未找到 meta description", "先确认页面类型与搜索摘要表现，再判断是否值得补充 description。")
     elif len(description) < 50 or len(description) > 170:
         add_issue(issues, "P3", "DESCRIPTION_LENGTH", file_rel, f"description 长度 {len(description)}", "检查描述是否过短、过长或缺少具体收益。")
 
@@ -617,9 +1452,9 @@ def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: Lis
         add_issue(issues, "P2", "MISSING_VIEWPORT", file_rel, "未找到 viewport meta", "补充移动端 viewport，确保移动优先体验。")
 
     if len(parser.canonicals) == 0:
-        add_issue(issues, "P1", "MISSING_CANONICAL", file_rel, "未找到 rel=canonical", "为核心可索引页面添加自引用 canonical，使用绝对 HTTPS URL。")
+        add_issue(issues, "P3", "CANONICAL_GAP", file_rel, "未找到 rel=canonical", "结合重复 URL、索引意图与其他规范化信号判断是否需要 canonical。")
     elif len(parser.canonicals) > 1:
-        add_issue(issues, "P1", "MULTIPLE_CANONICAL", file_rel, f"发现 {len(parser.canonicals)} 个 canonical", "每页只保留一个 canonical，避免搜索引擎忽略冲突信号。")
+        add_issue(issues, "P1", "CANONICAL_CONFLICT", file_rel, f"发现 {len(parser.canonicals)} 个 canonical", "每页只保留一个 canonical，避免搜索引擎忽略冲突信号。")
     else:
         if not is_absolute_http_url(canonical):
             add_issue(issues, "P1", "CANONICAL_NOT_ABSOLUTE", file_rel, canonical, "canonical 应使用完整绝对 URL，例如 https://example.com/path。")
@@ -627,7 +1462,7 @@ def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: Lis
             canonical_host = urlparse(canonical).netloc.lower()
             domain_host = urlparse(domain).netloc.lower()
             if canonical_host != domain_host:
-                add_issue(issues, "P1", "CANONICAL_DOMAIN_MISMATCH", file_rel, canonical, f"确认 canonical 域名应统一为 {domain_host}。")
+                add_issue(issues, "P1", "CANONICAL_CONFLICT", file_rel, canonical, f"确认 canonical 域名应统一为 {domain_host}。")
             if urlparse(canonical).scheme != "https":
                 add_issue(issues, "P2", "CANONICAL_NOT_HTTPS", file_rel, canonical, "正式站点优先使用 HTTPS canonical。")
 
@@ -635,9 +1470,7 @@ def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: Lis
         add_issue(issues, "P3", "OG_URL_CANONICAL_MISMATCH", file_rel, f"og:url={og_url}; canonical={canonical}", "通常让 og:url 与 canonical 保持一致，避免分享 URL 与规范 URL 冲突。")
 
     if len(h1s) == 0:
-        add_issue(issues, "P1", "MISSING_H1", file_rel, "未找到 H1", "每个页面应有一个 H1，直接表达页面主主题/主关键词。")
-    elif len(h1s) > 1:
-        add_issue(issues, "P1", "MULTIPLE_H1", file_rel, f"发现 {len(h1s)} 个 H1: {[h.get('text') for h in h1s[:5]]}", "通常每页保留一个主 H1，其余模块用 H2/H3。")
+        add_issue(issues, "P1", "MAIN_HEADING_UNCLEAR", file_rel, "未找到 H1", "每个页面应有一个能直接表达主任务的清晰标题。")
 
     levels = [int(h.get("level", 0)) for h in parser.headings]
     for prev, cur in zip(levels, levels[1:]):
@@ -646,9 +1479,9 @@ def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: Lis
             break
 
     if text_chars < 600 and script_count >= 5:
-        add_issue(issues, "P0", "CSR_OR_THIN_HTML_RISK", file_rel, f"可见文本约 {text_chars} 字符，script {script_count} 个", "核心 SEO 页面需要在初始 HTML/SSR/SSG 中输出主要文案，避免纯前端渲染导致爬虫难以读取。")
+        add_issue(issues, "P2", "RENDERED_TEXT_COVERAGE_CANDIDATE", file_rel, f"可见文本约 {text_chars} 字符，script {script_count} 个", "通过本轮运行时 HTML 验证主要文案是否实际输出；脚本数量本身不能证明 CSR-only。")
     elif text_chars < 900:
-        add_issue(issues, "P2", "THIN_CONTENT", file_rel, f"可见文本约 {text_chars} 字符", "检查页面是否充分覆盖搜索意图；核心落地页应补充步骤、功能、场景、FAQ、信任信号和相关链接。")
+        add_issue(issues, "P3", "CONTENT_DEPTH_REVIEW", file_rel, f"可见文本约 {text_chars} 字符", "结合页面类型与搜索意图人工判断内容是否足够；固定字符数不是薄内容结论。")
 
     issues.extend(audit_copy_text(text, file_rel, "高置信可见文本"))
 
@@ -669,37 +1502,13 @@ def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: Lis
     densities = [keyword_density(text, kw) for kw in keywords]
     for density in densities:
         kw = str(density["keyword"])
-        pct = float(density["density_percent"])
         count = int(density["count"])
         if count == 0:
             add_issue(issues, "P2", "KEYWORD_NOT_FOUND", file_rel, f"关键词 `{kw}` 在可见文本中未出现", "确认该关键词是否应映射到此页面；如果是，补充自然表达和相关语义内容。")
-        elif pct > 8:
-            add_issue(issues, "P2", "KEYWORD_DENSITY_HIGH", file_rel, f"`{kw}` 密度约 {pct}%", "降低机械重复，改用同义词、实体、示例和相关问题解释主词。")
-        elif 0 < pct < 1 and text_chars > 900:
-            add_issue(issues, "P3", "KEYWORD_DENSITY_LOW", file_rel, f"`{kw}` 密度约 {pct}%", "如果该页目标就是这个关键词，可在 H1/H2/首段/FAQ/内链锚文本中更自然地覆盖。")
 
-    return {
-        "file": file_rel,
-        "title": title,
-        "description": description,
-        "canonical": canonical,
-        "robots": robots,
-        "h1_count": len(h1s),
-        "h1": [h.get("text", "") for h in h1s],
-        "heading_counts": dict(Counter(int(h.get("level", 0)) for h in parser.headings)),
-        "text_chars": text_chars,
-        "word_units": words,
-        "image_count": len(parser.images),
-        "images_missing_alt": len(missing_alt),
-        "iframe_count": len(parser.iframes),
-        "internal_links": internal_links,
-        "external_links": external_links,
-        "empty_or_special_links": empty_links,
-        "script_count": script_count,
-        "json_ld_count": parser.json_ld_count,
-        "keyword_density": densities,
-        "issues": [asdict(issue) for issue in issues],
-    }
+    page_result["keyword_density"] = densities
+    page_result["issues"] = [asdict(issue) for issue in issues]
+    return page_result
 
 
 # ---------- source audit ----------
@@ -713,7 +1522,7 @@ def audit_source_files(root: Path, source_files: List[Path]) -> Dict[str, object
         "canonical_mentions": [],
         "h1_mentions": [],
         "json_ld_mentions": [],
-        "client_page_risks": [],
+        "client_component_pages": [],
         "img_without_alt_suspects": [],
         "route_files": [],
     }
@@ -723,10 +1532,27 @@ def audit_source_files(root: Path, source_files: List[Path]) -> Dict[str, object
 
     for path in source_files:
         file_rel = rel(path, root)
-        try:
-            content = safe_read(path)
-        except Exception:
+        read_state = read_text_state(path)
+        if read_state.error:
+            add_issue(
+                findings,
+                "P3",
+                "SOURCE_READ_FAILED",
+                file_rel,
+                f"读取失败：{read_state.error}",
+                "修复读取权限或编码后重新扫描；当前不能依据未命中下结论。",
+            )
             continue
+        content = read_state.text
+        if read_state.truncated:
+            add_issue(
+                findings,
+                "P3",
+                "SOURCE_READ_TRUNCATED",
+                file_rel,
+                f"文件超过 {MAX_READ_BYTES} bytes，扫描内容被截断",
+                "缩小文件或提供可完整读取的公开页面来源后重新扫描。",
+            )
         content_l = content.lower()
         if route_like_re.search(file_rel.replace(os.sep, "/")):
             summary["route_files"].append(file_rel)
@@ -740,22 +1566,25 @@ def audit_source_files(root: Path, source_files: List[Path]) -> Dict[str, object
         if "application/ld+json" in content_l or "schema.org" in content_l:
             summary["json_ld_mentions"].append(file_rel)
 
-        # Next App Router risk: a page component marked use client often means core content may render client-side.
+        # `use client` is a component boundary, not proof that initial HTML is absent.
         if re.search(r"^[\s;]*(?:'use client'|\"use client\")", content, flags=re.M):
             if re.search(r"(^|/)(app|src/app)/.*page\.(tsx|jsx|ts|js)$", file_rel.replace(os.sep, "/")):
-                summary["client_page_risks"].append(file_rel)
-                add_issue(
-                    findings,
-                    "P2",
-                    "NEXT_PAGE_USE_CLIENT",
-                    file_rel,
-                    "App Router page 文件包含 'use client'",
-                    "确认核心 SEO 文案是否仍由服务器输出；必要时把交互组件下沉，页面主体保留为 Server Component。",
-                )
+                summary["client_component_pages"].append(file_rel)
 
         for match in img_tag_re.finditer(content):
             attrs = match.group(1)
-            if "alt=" not in attrs.lower():
+            if re.search(r"\balt\s*=", attrs, flags=re.I):
+                continue
+            if re.search(r"\{\s*\.\.\.", attrs):
+                add_issue(
+                    findings,
+                    "P3",
+                    "SOURCE_IMG_ALT_UNKNOWN",
+                    file_rel,
+                    "源码 <img> 使用 spread props，无法静态确认 alt 属性",
+                    "通过渲染后的 HTML 或组件调用点验证 alt；当前不能判定缺失。",
+                )
+            else:
                 summary["img_without_alt_suspects"].append(file_rel)
                 add_issue(
                     findings,
@@ -765,10 +1594,17 @@ def audit_source_files(root: Path, source_files: List[Path]) -> Dict[str, object
                     "源码中发现疑似 <img> 未设置 alt",
                     "为重要图片添加描述性 alt；装饰图使用 alt=\"\"。",
                 )
-                break
 
-        if path.suffix.lower() in COPY_REVIEW_SOURCE_EXTS:
-            findings.extend(audit_copy_text(content, file_rel, "中置信源码/内容"))
+        public_route = mapped_public_route(file_rel)
+        if path.suffix.lower() in COPY_REVIEW_SOURCE_EXTS and public_route:
+            copy_findings = audit_copy_text(
+                visible_copy_source(content, path.suffix),
+                file_rel,
+                "中置信公开源码/内容",
+            )
+            if legal_policy_route(public_route):
+                copy_findings = [issue for issue in copy_findings if issue.code != "YMYL_COPY_REVIEW"]
+            findings.extend(copy_findings)
 
     # Repo-level hints.
     if summary["route_files"] and not summary["metadata_files"]:
@@ -809,7 +1645,19 @@ def audit_repo_files(root: Path, all_files: List[Path], domain: Optional[str]) -
     issues: List[Issue] = []
     files_by_rel = {rel(path, root): path for path in all_files}
 
-    robots_candidates = ["robots.txt", "public/robots.txt", "static/robots.txt"]
+    robots_candidates = [
+        "robots.txt",
+        "public/robots.txt",
+        "static/robots.txt",
+        "app/robots.ts",
+        "app/robots.js",
+        "app/robots.tsx",
+        "app/robots.jsx",
+        "src/app/robots.ts",
+        "src/app/robots.js",
+        "src/app/robots.tsx",
+        "src/app/robots.jsx",
+    ]
     robots_found = [name for name in robots_candidates if name in files_by_rel]
     if not robots_found:
         add_issue(issues, "P2", "ROBOTS_MISSING", "repo", "未发现 robots.txt", "添加 robots.txt，明确允许核心页面抓取并声明 sitemap 地址。")
@@ -821,7 +1669,19 @@ def audit_repo_files(root: Path, all_files: List[Path], domain: Optional[str]) -
             if "sitemap:" not in content.lower():
                 add_issue(issues, "P3", "ROBOTS_NO_SITEMAP", name, "robots.txt 未声明 Sitemap", "在 robots.txt 中补充 Sitemap: https://example.com/sitemap.xml。")
 
-    sitemap_candidates = ["sitemap.xml", "public/sitemap.xml", "static/sitemap.xml", "app/sitemap.ts", "app/sitemap.js", "src/app/sitemap.ts"]
+    sitemap_candidates = [
+        "sitemap.xml",
+        "public/sitemap.xml",
+        "static/sitemap.xml",
+        "app/sitemap.ts",
+        "app/sitemap.js",
+        "app/sitemap.tsx",
+        "app/sitemap.jsx",
+        "src/app/sitemap.ts",
+        "src/app/sitemap.js",
+        "src/app/sitemap.tsx",
+        "src/app/sitemap.jsx",
+    ]
     sitemap_found = [name for name in sitemap_candidates if name in files_by_rel]
     if not sitemap_found:
         add_issue(issues, "P1", "SITEMAP_MISSING", "repo", "未发现 sitemap 文件或生成入口", "添加 sitemap，列出希望被索引的 canonical URL。")
@@ -854,311 +1714,1529 @@ def collect_issues(result: Dict[str, object]) -> List[Dict[str, str]]:
     return issues
 
 
-def audit_adsense_readiness(result: Dict[str, object], root: Path, all_files: List[Path]) -> Dict[str, object]:
-    checks: List[Dict[str, str]] = []
-    html_pages = result.get("html_pages", [])
-    seo_issues = collect_issues(result)
-    issue_codes = {str(issue.get("code", "")) for issue in seo_issues}
+def source_route(file_path: str) -> Optional[str]:
+    """Map simple public page files to a route without claiming runtime reachability."""
+    value = file_path.replace("\\", "/")
+    match = re.search(r"(?:^|/)(?:src/)?app/(.*?)/?page\.(?:js|jsx|ts|tsx)$", value, flags=re.I)
+    if match:
+        parts = [part for part in match.group(1).split("/") if part and not (part.startswith("(") and part.endswith(")"))]
+        return "/" + "/".join(parts) if parts else "/"
+    match = re.search(r"(?:^|/)(?:src/)?pages/(.*)\.(?:js|jsx|ts|tsx)$", value, flags=re.I)
+    if match:
+        route = re.sub(r"(?:^|/)index$", "", match.group(1)).strip("/")
+        return "/" + route if route else "/"
+    return None
 
-    required_page_specs = [
-        ("About 页面", ["about", "about-us", "about_us"], "P0", ["ADS-UX-05", "ADS-PUB-05"], "说明网站是谁维护、解决什么问题，让审核者看到真实站点身份。"),
-        ("Contact 页面", ["contact", "contact-us", "contact_us"], "P0", ["ADS-UX-05", "ADS-PUB-05"], "提供可联系邮箱或表单；AdSense 审核通常需要基本联系入口。"),
-        ("Privacy Policy 页面", ["privacy", "privacy-policy", "privacy_policy"], "P0", ["ADS-UX-05", "ADS-PRIV-01", "ADS-PRIV-02"], "补齐隐私政策，并让内容匹配实际 cookies、广告、统计和表单收集行为。"),
-        ("Terms 页面", ["terms", "terms-of-service", "terms_of_service", "tos"], "P0", ["ADS-UX-05"], "补齐使用条款，说明内容、游戏/工具使用边界和免责声明。"),
-    ]
-    required_pages: Dict[str, List[str]] = {}
-    for label, tokens, severity, ids, recommendation in required_page_specs:
-        matches = find_likely_pages(all_files, root, tokens)
-        required_pages[label] = matches
-        if matches:
-            add_adsense_check(checks, severity, label, "pass", f"发现候选文件：{', '.join(matches[:5])}", "确认页面在导航或页脚中可访问，且内容不是空模板。", ids)
-        else:
-            add_adsense_check(checks, severity, label, "fail", "未发现明显候选文件", recommendation, ids)
 
-    article_files = find_likely_article_files(all_files, root)
-    if len(article_files) >= 5:
-        add_adsense_check(checks, "P2", "Blog / 内容区", "pass", f"发现约 {len(article_files)} 个候选内容文件", "审核阶段继续保持原创、相关、可索引，避免空壳文章。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CRAWL-07"])
-    elif article_files:
-        add_adsense_check(checks, "P2", "Blog / 内容区", "warn", f"只发现约 {len(article_files)} 个候选内容文件", "审核前建议准备 5-10 篇围绕游戏/工具主题的原创攻略、教程、推荐或问题解答。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CRAWL-07"])
+def html_source_route(path: Path, root: Path) -> Optional[str]:
+    value = rel_posix(path, root)
+    for prefix in ("public/", "static/"):
+        if value.startswith(prefix):
+            value = value[len(prefix) :]
+            break
+    if value.lower() in {"index.html", "index.htm"}:
+        return "/"
+    value = re.sub(r"/index\.html?$", "", value, flags=re.I)
+    value = re.sub(r"\.html?$", "", value, flags=re.I)
+    return "/" + value.strip("/") if value else "/"
+
+
+def normalize_route_entry(route: object, value: object) -> Optional[Dict[str, object]]:
+    if not isinstance(route, str) or not route.startswith("/"):
+        return None
+    normalized_route = normalize_route_path(route)
+    if not normalized_route:
+        return None
+    data = dict(value) if isinstance(value, dict) else {}
+    raw_keywords = data.get("keywords", [])
+    if isinstance(raw_keywords, str):
+        route_keywords = [normalize_ws(item) for item in raw_keywords.split(",") if normalize_ws(item)]
+    elif isinstance(raw_keywords, list):
+        route_keywords = [normalize_ws(str(item)) for item in raw_keywords if normalize_ws(str(item))]
     else:
-        add_adsense_check(checks, "P2", "Blog / 内容区", "fail", "未发现明显 blog/posts/articles/guides 内容目录", "增加 Blog 或 Guides 区域，先发布 5-10 篇与主关键词和长尾词相关的原创文章。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CRAWL-07"])
-
-    iframe_risk_pages = [
-        page
-        for page in html_pages
-        if int(page.get("iframe_count", 0) or 0) > 0 and int(page.get("text_chars", 0) or 0) < 1200
-    ]
-    if iframe_risk_pages:
-        preview = ", ".join(str(page.get("file", "")) for page in iframe_risk_pages[:8])
-        add_adsense_check(checks, "P1", "游戏/工具页不是纯 iframe 壳", "fail", f"{len(iframe_risk_pages)} 个页面 iframe 较重且正文少：{preview}", "每个游戏/工具页补原创介绍、玩法/使用步骤、FAQ、相关内容和站内链接，不能只嵌入 iframe。", ["ADS-CONTENT-02", "ADS-CONTENT-03", "ADS-PROG-06", "ADS-PUB-11"])
-    else:
-        add_adsense_check(checks, "P1", "游戏/工具页不是纯 iframe 壳", "pass", "未在静态 HTML 中发现 iframe-heavy thin page", "仍需人工打开核心页确认首屏不是通用模板或纯嵌入壳。", ["ADS-CONTENT-02", "ADS-CONTENT-03", "ADS-PROG-06", "ADS-PUB-11"])
-
-    thin_core_pages = [
-        page
-        for page in html_pages
-        if is_adsense_core_page(str(page.get("file", ""))) and int(page.get("text_chars", 0) or 0) < 900
-    ]
-    if thin_core_pages:
-        preview = ", ".join(f"{page.get('file')}({page.get('text_chars', 0)} chars)" for page in thin_core_pages[:8])
-        add_adsense_check(checks, "P1", "首页/分类/核心页内容厚度", "fail", preview, "首页、分类页、游戏页和工具页要有可读正文、模块说明、FAQ 和相关入口；宁可页面少，也要每页扎实。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CONTENT-04", "ADS-PUB-11"])
-    else:
-        add_adsense_check(checks, "P1", "首页/分类/核心页内容厚度", "pass", "未发现明显核心 HTML 页面正文过薄", "如果项目是 SSR/SSG 框架，还需构建后查看源代码确认核心文案真实输出。", ["ADS-CONTENT-01", "ADS-CONTENT-03", "ADS-CONTENT-04", "ADS-PUB-11"])
-
-    if "MISSING_VIEWPORT" in issue_codes:
-        add_adsense_check(checks, "P2", "移动端基础适配", "fail", "SEO 检查发现 MISSING_VIEWPORT", "补充 viewport，并在手机视口确认游戏/工具、导航、内容和潜在广告位不会遮挡。", ["ADS-UX-01", "ADS-PUB-10", "ADS-REST-08"])
-    else:
-        add_adsense_check(checks, "P2", "移动端基础适配", "pass", "未发现 viewport 缺失问题", "仍需人工检查移动端布局和广告位预留。", ["ADS-UX-01", "ADS-PUB-10", "ADS-REST-08"])
-
-    blocking_codes = sorted(issue_codes & {"NOINDEX", "ROBOTS_DISALLOW_ALL", "SITEMAP_MISSING", "CANONICAL_DOMAIN_MISMATCH"})
-    if blocking_codes:
-        add_adsense_check(checks, "P0", "抓取/索引基础", "fail", f"发现阻断或高风险 SEO 问题：{', '.join(blocking_codes)}", "AdSense 审核前先修复抓取、索引、sitemap 和 canonical 基础问题。", ["ADS-CRAWL-01", "ADS-CRAWL-02", "ADS-CRAWL-07"])
-    else:
-        add_adsense_check(checks, "P0", "抓取/索引基础", "pass", "未发现 noindex、robots 全站误封、sitemap 缺失或 canonical 错域名", "上线后仍需用 Google Search Console 验证真实收录。", ["ADS-CRAWL-01", "ADS-CRAWL-02", "ADS-CRAWL-07"])
-
-    manual_checks = [
-        {
-            "ids": ["ADS-CONTENT-01", "ADS-UX-02"],
-            "item": "视觉差异化",
-            "why": "审核者第一眼会判断这是认真维护的网站，还是批量模板。",
-            "how": "参考主打游戏/工具的配色、字体、素材和页面氛围，避免一眼通用模板。",
-        },
-        {
-            "ids": ["ADS-CONTENT-01", "ADS-CRAWL-07"],
-            "item": "真实流量与索引",
-            "why": "社区经验显示，近年的 low value content 经常和无人访问、无人搜索命中相关。",
-            "how": "提供 GSC 已收录页面、点击/展示、自然搜索趋势和核心页访问数据。",
-        },
-        {
-            "ids": ["ADS-CONTENT-01", "ADS-CONTENT-03"],
-            "item": "GSC 5-20 名查询",
-            "why": "这些词已经被 Google 认为相关，通常比从 50 名以外冲首页更容易。",
-            "how": "找 impressions 有量、排名 5-20、点击低的查询，补专门页面或优化对应段落。",
-        },
-        {
-            "ids": ["ADS-PUB-01", "ADS-PUB-02", "ADS-PUB-03", "ADS-PUB-08", "ADS-REST-01", "ADS-REST-06"],
-            "item": "版权与政策风险",
-            "why": "侵权游戏、成人、赌博、仇恨/暴力等内容可能直接导致拒绝甚至封号。",
-            "how": "人工确认游戏授权、素材来源、用户生成内容和站内外链接是否符合政策。",
-        },
-    ]
-
-    fail_count = sum(1 for check in checks if check["status"] == "fail")
-    p0_fail_count = sum(1 for check in checks if check["status"] == "fail" and check["severity"] == "P0")
-    p1_fail_count = sum(1 for check in checks if check["status"] == "fail" and check["severity"] == "P1")
-    warn_count = sum(1 for check in checks if check["status"] == "warn")
-    if p0_fail_count:
-        conclusion = "AdSense 审核高风险：先补齐政策/信任页面和抓取索引基础，再提交审核。"
-    elif p1_fail_count:
-        conclusion = "AdSense 审核中高风险：当前更像薄内容或游戏/工具壳，需要先补原创内容和页面价值。"
-    elif warn_count:
-        conclusion = "AdSense 审核有通过基础，但内容厚度、Blog 或人工信号还需要补强。"
-    else:
-        conclusion = "静态检查未发现明显 AdSense 审核阻断项，但仍需人工确认视觉、流量、索引和版权政策。"
-
-    low_value_likely_causes = [
-        "核心页只有游戏 iframe、工具入口或营销文案，缺少原创解释、玩法/教程、FAQ 和相关内链。",
-        "首页、分类页和详情页没有形成关键词到页面的长尾覆盖，只是堆卡片或封面图。",
-        "缺少 Blog/Guides 内容区，Google 缺少可收录、可理解、可判断价值的原创页面。",
-        "页面存在但无人访问或 GSC 中几乎没有收录/展示，容易被判断为没有用户价值。",
-    ]
-    manual_data_needed = [
-        "AdSense 后台拒绝原因原文或截图",
-        "Google Search Console 已收录页面数量和未收录原因",
-        "GSC 查询列表，尤其是排名 5-20 且展示不低的词",
-        "近 28/90 天自然流量、展示、点击和核心页面访问数据",
-        "游戏/工具素材和内容版权来源说明",
-    ]
-    static_ads_ids = sorted({ads_id for check in checks for ads_id in check.get("ids", [])})
-
+        route_keywords = []
     return {
-        "enabled": True,
-        "conclusion": conclusion,
-        "checks": checks,
-        "manual_checks": manual_checks,
-        "low_value_likely_causes": low_value_likely_causes,
-        "manual_data_needed": manual_data_needed,
-        "required_pages": required_pages,
-        "article_count": len(article_files),
-        "article_files": article_files[:50],
-        "iframe_risk_pages": [page.get("file", "") for page in iframe_risk_pages[:50]],
-        "thin_core_pages": [page.get("file", "") for page in thin_core_pages[:50]],
-        "summary": {"fail": fail_count, "warn": warn_count, "p0_fail": p0_fail_count, "p1_fail": p1_fail_count, "static_ads_ids_evidenced": static_ads_ids},
+        "route": normalized_route,
+        "index_intent": normalize_index_intent(data.get("index_intent")),
+        "priority": normalize_priority(data.get("priority")),
+        "keywords": route_keywords,
+        "intent_source": data.get("intent_source", "routes-file"),
     }
 
 
-def write_adsense_markdown(lines: List[str], adsense: Dict[str, object]) -> None:
-    lines.append("## AdSense 审核诊断")
-    lines.append(str(adsense.get("conclusion", "")))
-    lines.append("")
-    lines.append("静态脚本只输出可从本地代码/静态 HTML 证明的 ADS-* 证据；完整 AdSense 审核仍需按 `references/adsense-requirements.md` 覆盖全部 73 个 ID，并把无法证明的项标为 Unknown 或 N/A。")
-    lines.append("")
-    lines.append("### 审核清单")
-    lines.append("| ADS ID | 优先级 | 检查项 | 状态 | 证据 | 建议 |")
-    lines.append("|---|---|---|---|---|---|")
-    for check in adsense.get("checks", []):
-        lines.append(
-            f"| {escape_md(format_ads_ids(check.get('ids')))} | {escape_md(check.get('severity'))} | {escape_md(check.get('item'))} | {escape_md(check.get('status'))} | {escape_md(check.get('evidence'))} | {escape_md(check.get('recommendation'))} |"
+def load_routes_file(path_value: str) -> Tuple[List[Dict[str, object]], Optional[str]]:
+    if not path_value:
+        return [], None
+    path = Path(path_value)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return [], type(exc).__name__
+
+    container: object = payload
+    if isinstance(payload, dict) and "routes" in payload:
+        container = payload.get("routes")
+
+    entries: List[Dict[str, object]] = []
+    if isinstance(container, dict):
+        for route, value in container.items():
+            entry = normalize_route_entry(route, value)
+            if entry:
+                entries.append(entry)
+    elif isinstance(container, list):
+        for value in container:
+            if not isinstance(value, dict):
+                continue
+            entry = normalize_route_entry(value.get("route"), value)
+            if entry:
+                entries.append(entry)
+    else:
+        return [], "InvalidRouteContainer"
+    return entries, None
+
+
+def finding_from_issue(issue: Dict[str, str]) -> Dict[str, object]:
+    path = str(issue.get("file", "repo"))
+    route = mapped_public_route(path)
+    code = str(issue.get("code", ""))
+    read_unknown = code.startswith("SOURCE_READ_") or code.startswith("HTML_READ_")
+    parse_unknown = code == "ROUTES_FILE_UNREADABLE" or code == "HTML_PARSE_FAILED"
+    static_unknown = code == "SOURCE_IMG_ALT_UNKNOWN"
+    absence_unknown = code in {
+        "ROBOTS_MISSING",
+        "SITEMAP_MISSING",
+        "NO_METADATA_SOURCE_FOUND",
+        "NO_CANONICAL_SOURCE_FOUND",
+        "NO_SCHEMA_SOURCE_FOUND",
+    }
+    return {
+        "status": "Unknown" if read_unknown or parse_unknown or static_unknown or absence_unknown else "Candidate",
+        "impact": issue.get("severity", "P3"),
+        "code": issue.get("code", "UNKNOWN_RULE"),
+        "route": route,
+        "route_kind": "public" if route else "unknown",
+        "index_intent": "unknown",
+        "indexability": "unknown",
+        "runtime_reachable": None,
+        "status_code": None,
+        "evidence_kind": "read_state" if read_unknown else ("parse_state" if parse_unknown else "source_heuristic"),
+        "path_or_url": path,
+        "provenance": {"mode": "source-only"},
+        "evidence": issue.get("evidence", ""),
+        "recommendation": issue.get("recommendation", ""),
+    }
+
+
+def content_hash(path: Path) -> Optional[str]:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(128 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def dedupe_findings(findings: List[Dict[str, object]], root: Path) -> List[Dict[str, object]]:
+    deduped: Dict[Tuple[object, object, object], Dict[str, object]] = {}
+    for finding in findings:
+        path_value = str(finding.get("path_or_url") or "")
+        candidate_path = root / path_value
+        existing_provenance = finding.get("provenance") if isinstance(finding.get("provenance"), dict) else {}
+        digest = existing_provenance.get("content_hash") or (
+            content_hash(candidate_path) if candidate_path.is_file() else None
         )
-    lines.append("")
+        key = (
+            finding.get("route"),
+            finding.get("code"),
+            digest if digest else path_value,
+        )
+        if key not in deduped:
+            if existing_provenance.get("mode") and existing_provenance.get("mode") != "source-only":
+                provenance = dict(existing_provenance)
+                provenance.setdefault("content_hash", digest)
+                provenance.setdefault("paths", [path_value] if path_value else [])
+                finding["provenance"] = provenance
+            else:
+                finding["provenance"] = {
+                    "mode": "source-only",
+                    "kind": finding.get("evidence_kind"),
+                    "content_hash": digest,
+                    "paths": [path_value] if path_value else [],
+                }
+            deduped[key] = finding
+            continue
+        provenance = deduped[key]["provenance"]
+        paths = provenance.get("paths", [])
+        if path_value and path_value not in paths:
+            paths.append(path_value)
+            paths.sort()
+    return sorted(
+        deduped.values(),
+        key=lambda item: (
+            SEVERITY_ORDER.get(str(item.get("impact", "P3")), 9),
+            str(item.get("route") or ""),
+            str(item.get("code") or ""),
+            str(item.get("path_or_url") or ""),
+        ),
+    )
 
-    low_value_causes = adsense.get("low_value_likely_causes", [])
-    if low_value_causes:
-        lines.append("### Low value content 常见原因")
-        for cause in low_value_causes:
-            lines.append(f"- {escape_md(cause)}")
-        lines.append("")
 
-    manual_checks = adsense.get("manual_checks", [])
-    if manual_checks:
-        lines.append("### 必须人工确认")
-        lines.append("| ADS ID | 项目 | 为什么重要 | 怎么确认 |")
-        lines.append("|---|---|---|---|")
-        for check in manual_checks:
-            lines.append(f"| {escape_md(format_ads_ids(check.get('ids')))} | {escape_md(check.get('item'))} | {escape_md(check.get('why'))} | {escape_md(check.get('how'))} |")
-        lines.append("")
+def coverage_gap(
+    route: Optional[str],
+    reason: str,
+    evidence_needed: str,
+    path_or_url: Optional[str] = None,
+) -> Dict[str, object]:
+    gap: Dict[str, object] = {
+        "route": route,
+        "reason": reason,
+        "evidence_needed": evidence_needed,
+    }
+    if path_or_url:
+        gap["path_or_url"] = path_or_url
+    return gap
 
-    manual_data = adsense.get("manual_data_needed", [])
-    if manual_data:
-        lines.append("### 建议补充的数据")
-        for item in manual_data:
-            lines.append(f"- {escape_md(item)}")
-        lines.append("")
+
+SOURCE_ORDER = {
+    "routes_file": 0,
+    "sitemap": 1,
+    "registry": 2,
+    "framework": 3,
+    "content_inventory": 4,
+    "rendered": 5,
+    "sentinel": 6,
+}
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def normalize_index_intent(value: object) -> str:
+    normalized = normalize_ws(str(value or "unknown")).lower().replace("_", "")
+    if normalized in {"index", "indexable"}:
+        return "index"
+    if normalized in {"noindex", "nonindex", "nonindexable"}:
+        return "noindex"
+    return "unknown"
+
+
+def normalize_priority(value: object) -> str:
+    normalized = normalize_ws(str(value or "normal")).lower()
+    if normalized in {"core", "normal", "low", "supporting", "excluded", "sentinel"}:
+        return normalized
+    return "normal"
+
+
+def normalize_route_path(value: object) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    if any(ord(char) < 32 for char in raw) or "\\" in raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            return None
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        path = parsed.path
+    else:
+        path = raw.split("?", 1)[0].split("#", 1)[0]
+    if any(part in {".", ".."} for part in path.split("/")):
+        return None
+    if not path.startswith("/"):
+        path = "/" + path
+    path = re.sub(r"/{2,}", "/", path)
+    if path != "/":
+        path = path.rstrip("/")
+    return path or "/"
+
+
+def classify_route_kind(route: str) -> str:
+    path = route.lower()
+    path = re.sub(r"^/(?:\[locale\]|[a-z]{2}(?:-[a-z]{2})?)(?=/|$)", "", path) or "/"
+    if re.match(r"^/(?:api|rpc|webhooks?)(?:/|$)", path):
+        return "api"
+    if re.match(
+        r"^/(?:sign-in|sign-up|signin|signup|login|register|auth|oauth|verify-email|forgot-password|reset-password|no-permission)(?:/|$)",
+        path,
+    ):
+        return "auth"
+    if re.match(r"^/(?:admin|dashboard|account|settings|activity)(?:/|$)", path):
+        return "admin"
+    if re.match(r"^/(?:404|500|error|not-found)(?:/|$)", path):
+        return "error"
+    if path in {"/robots.txt", "/sitemap.xml", "/manifest.json", "/manifest.webmanifest", "/ads.txt"}:
+        return "metadata"
+    return "public"
+
+
+def new_route_record(route: str) -> Dict[str, object]:
+    kind = classify_route_kind(route)
+    scored = kind == "public"
+    return {
+        "route": route,
+        "route_kind": kind,
+        "index_intent": "unknown",
+        "intent_source": "unknown",
+        "priority": "normal",
+        "keywords": [],
+        "sources": [],
+        "scored": scored,
+        "not_scored_reason": None if scored else f"route_kind:{kind}",
+        "runtime_reachable": None,
+        "status_code": None,
+        "location": None,
+        "final_url": None,
+        "content_type": None,
+        "indexability": "unknown",
+        "evidence_kind": "source_heuristic",
+        "path_or_url": route,
+        "provenance": {"mode": "source-only"},
+        "coverage_status": "gap" if scored else "classified",
+        "is_pattern": bool(re.search(r"\[[^]]+\]", route)),
+    }
+
+
+def merge_route(
+    route_map: Dict[str, Dict[str, object]],
+    route_value: object,
+    source: str,
+    data: Optional[Dict[str, object]] = None,
+) -> Optional[Dict[str, object]]:
+    route = normalize_route_path(route_value)
+    if not route:
+        return None
+    record = route_map.setdefault(route, new_route_record(route))
+    sources = set(record.get("sources", []))
+    sources.add(source)
+    record["sources"] = sorted(sources, key=lambda item: (SOURCE_ORDER.get(item, 99), item))
+    data = data or {}
+    if source == "routes_file":
+        record["index_intent"] = normalize_index_intent(data.get("index_intent"))
+        record["intent_source"] = str(data.get("intent_source") or "routes-file")
+        record["priority"] = normalize_priority(data.get("priority"))
+        record["keywords"] = list(data.get("keywords") or [])
+    elif record.get("index_intent") == "unknown" and source == "sitemap":
+        record["index_intent"] = "index"
+        record["intent_source"] = source
+    if source != "routes_file" and data.get("route_kind") in {
+        "public", "metadata", "api", "auth", "admin", "error", "redirect", "unregistered", "unknown"
+    }:
+        record["route_kind"] = data["route_kind"]
+    if data.get("is_pattern") is not None:
+        record["is_pattern"] = bool(data.get("is_pattern"))
+    if data.get("path"):
+        paths = set(record.get("source_paths", []))
+        paths.add(str(data["path"]))
+        record["source_paths"] = sorted(paths)
+    if data.get("metadata_sources"):
+        metadata_sources = set(record.get("metadata_sources", []))
+        metadata_sources.update(str(item) for item in data.get("metadata_sources", []))
+        record["metadata_sources"] = sorted(metadata_sources)
+    if source != "routes_file":
+        for key in ["registry_collection", "registry_status", "is_article", "locale", "sentinel_kind", "rendered_path"]:
+            if key in data:
+                record[key] = data[key]
+    kind = str(record.get("route_kind") or "unknown")
+    record["scored"] = kind == "public" and not record.get("is_pattern")
+    record["not_scored_reason"] = None if record["scored"] else (
+        "dynamic_pattern_without_concrete_route" if record.get("is_pattern") else f"route_kind:{kind}"
+    )
+    record["coverage_status"] = (
+        "gap"
+        if record["scored"] or (record.get("is_pattern") and kind == "public")
+        else "classified"
+    )
+    return record
+
+
+def dynamic_pattern_regex(pattern: str) -> re.Pattern:
+    segments = [segment for segment in pattern.strip("/").split("/") if segment]
+    pieces = ["^"]
+    for index, segment in enumerate(segments):
+        if index == 0 and segment == "[locale]":
+            pieces.append(r"(?:/[A-Za-z]{2}(?:-[A-Za-z]{2})?)?")
+        elif re.fullmatch(r"\[\[\.\.\.[^]]+\]\]", segment):
+            pieces.append(r"(?:/[^/]+(?:/[^/]+)*)?")
+        elif re.fullmatch(r"\[\.\.\.[^]]+\]", segment):
+            pieces.append(r"/[^/]+(?:/[^/]+)*")
+        elif re.fullmatch(r"\[[^]]+\]", segment):
+            pieces.append(r"/[^/]+")
+        else:
+            pieces.append("/" + re.escape(segment))
+    pieces.append(r"/?$")
+    return re.compile("".join(pieces))
+
+
+def resolve_dynamic_patterns(route_map: Dict[str, Dict[str, object]]) -> None:
+    concrete_routes = [
+        str(record.get("route"))
+        for record in route_map.values()
+        if not record.get("is_pattern")
+        and record.get("route_kind") == "public"
+        and set(record.get("sources", [])) & {"sitemap", "routes_file", "registry"}
+    ]
+    for record in route_map.values():
+        if not record.get("is_pattern") or record.get("route_kind") != "public":
+            continue
+        matcher = dynamic_pattern_regex(str(record.get("route") or ""))
+        matches = sorted(route for route in concrete_routes if matcher.fullmatch(route))
+        if not matches:
+            continue
+        record["matched_routes"] = matches
+        record["coverage_status"] = "classified"
+        record["not_scored_reason"] = "dynamic_pattern_covered_by_concrete_routes"
+
+
+def decode_http_body(data: bytes, content_type: Optional[str]) -> str:
+    charset = "utf-8"
+    if content_type:
+        match = re.search(r"charset=([A-Za-z0-9._-]+)", content_type, flags=re.I)
+        if match:
+            charset = match.group(1)
+    try:
+        return data.decode(charset)
+    except (LookupError, UnicodeDecodeError):
+        return data.decode("utf-8", errors="replace")
+
+
+def fetch_http(url: str) -> HTTPResult:
+    request = Request(url, headers={"User-Agent": "seo-code-diagnostic/2", "Accept": "text/html,application/xml,text/plain,*/*"})
+    opener = build_opener(NoRedirectHandler())
+    response = None
+    try:
+        response = opener.open(request, timeout=HTTP_TIMEOUT_SECONDS)
+    except HTTPError as exc:
+        response = exc
+    except (URLError, TimeoutError, OSError) as exc:
+        return HTTPResult(url, None, {}, b"", "", False, type(exc).__name__, None, None, None)
+
+    try:
+        status = int(response.getcode())
+        headers = {str(key).lower(): str(value) for key, value in response.headers.items()}
+        data = response.read(MAX_HTTP_BYTES + 1)
+        truncated = len(data) > MAX_HTTP_BYTES
+        data = data[:MAX_HTTP_BYTES]
+        content_type = headers.get("content-type")
+        location = headers.get("location")
+        final_url = urljoin(url, location) if location and 300 <= status < 400 else response.geturl()
+        return HTTPResult(
+            url,
+            status,
+            headers,
+            data,
+            decode_http_body(data, content_type),
+            truncated,
+            None,
+            location,
+            final_url,
+            content_type,
+        )
+    except (OSError, ValueError) as exc:
+        return HTTPResult(url, None, {}, b"", "", False, type(exc).__name__, None, None, None)
+    finally:
+        if response is not None:
+            response.close()
+
+
+def runtime_url(base_url: str, route: str) -> str:
+    return base_url.rstrip("/") + (route if route.startswith("/") else "/" + route)
+
+
+def discover_sitemap(
+    base_url: str,
+    domain: Optional[str] = None,
+) -> Tuple[List[str], HTTPResult, List[Dict[str, object]]]:
+    primary = fetch_http(runtime_url(base_url, "/sitemap.xml"))
+    routes: List[str] = []
+    gaps: List[Dict[str, object]] = []
+    visited: set = set()
+    expected_host = (urlparse(domain).hostname or "").lower() if domain else ""
+
+    def sitemap_path(value: str) -> Optional[str]:
+        parsed = urlparse(value)
+        route = normalize_route_path(value)
+        if not route or parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            return None
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        if expected_host and (parsed.hostname or "").lower() != expected_host:
+            return None
+        return route
+
+    def visit(result: HTTPResult, depth: int) -> None:
+        if result.requested_url in visited:
+            return
+        visited.add(result.requested_url)
+        if len(visited) > 20 or depth > 3:
+            gaps.append(
+                coverage_gap(None, "sitemap_recursion_limit", "At most 20 sitemap documents and 3 nested levels", result.requested_url)
+            )
+            return
+        if result.status_code != 200 or result.truncated or result.error:
+            gaps.append(
+                coverage_gap(None, "sitemap_discovery_failed", "A complete parseable current sitemap", result.requested_url)
+            )
+            return
+        try:
+            xml_root = ET.fromstring(result.text)
+        except ET.ParseError:
+            gaps.append(
+                coverage_gap(None, "sitemap_discovery_failed", "A parseable XML sitemap", result.requested_url)
+            )
+            return
+        root_kind = xml_root.tag.rsplit("}", 1)[-1].lower()
+        loc_values = [
+            normalize_ws(str(element.text or ""))
+            for element in xml_root.iter()
+            if element.tag.rsplit("}", 1)[-1].lower() == "loc" and normalize_ws(str(element.text or ""))
+        ]
+        if root_kind == "sitemapindex":
+            for loc in loc_values:
+                child_path = sitemap_path(loc)
+                if not child_path:
+                    gaps.append(
+                        coverage_gap(None, "sitemap_url_invalid", "A same-domain HTTP sitemap URL without dot segments or userinfo", result.requested_url)
+                    )
+                    continue
+                visit(fetch_http(runtime_url(base_url, child_path)), depth + 1)
+            return
+        if root_kind != "urlset":
+            gaps.append(
+                coverage_gap(None, "sitemap_discovery_failed", "A sitemapindex or urlset XML root", result.requested_url)
+            )
+            return
+        for loc in loc_values:
+            route = sitemap_path(loc)
+            if route and route not in routes:
+                routes.append(route)
+            elif not route:
+                gaps.append(
+                    coverage_gap(None, "sitemap_url_invalid", "A same-domain HTTP page URL without dot segments or userinfo", result.requested_url)
+                )
+
+    visit(primary, 0)
+    return routes, primary, gaps
+
+
+def parse_runtime_html(text: str) -> SEOHTMLParser:
+    parser = SEOHTMLParser()
+    parser.feed(text)
+    parser.close()
+    return parser
+
+
+def response_provenance(result: HTTPResult, mode: str) -> Dict[str, object]:
+    return {
+        "mode": mode,
+        "content_hash": hashlib.sha256(result.body).hexdigest() if result.body else None,
+    }
+
+
+def robots_disallows_all(result: Optional[HTTPResult]) -> bool:
+    if not result or result.error or result.truncated or result.status_code != 200:
+        return False
+
+    groups: List[Tuple[List[str], List[Tuple[str, str]]]] = []
+    agents: List[str] = []
+    directives: List[Tuple[str, str]] = []
+    for raw_line in result.text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        field, value = (part.strip() for part in line.split(":", 1))
+        field = field.lower()
+        value = value.lower()
+        if field == "user-agent":
+            if directives:
+                groups.append((agents, directives))
+                agents = []
+                directives = []
+            agents.append(value)
+        elif agents and field in {"allow", "disallow"}:
+            directives.append((field, value))
+    if agents:
+        groups.append((agents, directives))
+
+    for group_agents, group_directives in groups:
+        if "*" not in group_agents:
+            continue
+        disallows_root = any(field == "disallow" and value == "/" for field, value in group_directives)
+        has_allowance = any(field == "allow" and value.startswith("/") for field, value in group_directives)
+        if disallows_root and not has_allowance:
+            return True
+    return False
+
+
+def robots_blocks_route(result: Optional[HTTPResult], route: str) -> bool:
+    if not result or result.error or result.truncated or result.status_code != 200:
+        return False
+    agents: List[str] = []
+    directives: List[Tuple[str, str]] = []
+    groups: List[Tuple[List[str], List[Tuple[str, str]]]] = []
+    for raw_line in result.text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        field, value = (part.strip() for part in line.split(":", 1))
+        field = field.lower()
+        if field == "user-agent":
+            if directives:
+                groups.append((agents, directives))
+                agents = []
+                directives = []
+            agents.append(value.lower())
+        elif agents and field in {"allow", "disallow"}:
+            directives.append((field, value))
+    if agents:
+        groups.append((agents, directives))
+
+    matches: List[Tuple[int, int, str]] = []
+    for group_agents, group_directives in groups:
+        if "*" not in group_agents:
+            continue
+        for field, value in group_directives:
+            if not value:
+                continue
+            anchored = value.endswith("$")
+            raw_pattern = value[:-1] if anchored else value
+            regex = "^" + re.escape(raw_pattern).replace(r"\*", ".*")
+            if anchored:
+                regex += "$"
+            if not re.search(regex, route):
+                continue
+            specificity = len(raw_pattern.replace("*", ""))
+            allow_tiebreak = 1 if field == "allow" else 0
+            matches.append((specificity, allow_tiebreak, field))
+    if not matches:
+        return False
+    return max(matches)[2] == "disallow"
+
+
+def runtime_finding(
+    record: Dict[str, object],
+    result: HTTPResult,
+    code: str,
+    impact: str,
+    evidence: str,
+    recommendation: str,
+    status: str = "Confirmed",
+) -> Dict[str, object]:
+    return {
+        "code": code,
+        "status": status,
+        "impact": impact,
+        "route": record.get("route"),
+        "route_kind": record.get("route_kind", "unknown"),
+        "index_intent": record.get("index_intent", "unknown"),
+        "indexability": record.get("indexability", "unknown"),
+        "runtime_reachable": record.get("runtime_reachable"),
+        "status_code": record.get("status_code"),
+        "evidence_kind": record.get("evidence_kind", "http"),
+        "path_or_url": result.requested_url,
+        "provenance": dict(record.get("provenance") or {"mode": "runtime"}),
+        "evidence": normalize_ws(evidence),
+        "recommendation": normalize_ws(recommendation),
+    }
+
+
+def verify_runtime_route(
+    record: Dict[str, object],
+    base_url: str,
+    domain: Optional[str],
+    provided_result: Optional[HTTPResult] = None,
+    evidence_kind: str = "http",
+    provenance_mode: str = "runtime",
+) -> Tuple[List[Dict[str, object]], Optional[Dict[str, object]]]:
+    route = str(record["route"])
+    if record.get("is_pattern"):
+        if record.get("route_kind") != "public" or record.get("matched_routes"):
+            record["coverage_status"] = "classified"
+            return [], None
+        record["coverage_status"] = "gap"
+        return [], coverage_gap(route, "dynamic_pattern_without_concrete_route", "A concrete URL from sitemap, routes-file, registry, or generateStaticParams", route)
+
+    result = provided_result or fetch_http(runtime_url(base_url, route))
+    record.update(
+        {
+            "runtime_reachable": result.status_code is not None,
+            "status_code": result.status_code,
+            "location": result.location,
+            "final_url": result.final_url,
+            "content_type": result.content_type,
+            "evidence_kind": evidence_kind if result.status_code is not None else "read_state",
+            "path_or_url": result.requested_url,
+            "provenance": response_provenance(result, provenance_mode),
+        }
+    )
+    if result.error or result.status_code is None:
+        record["runtime_reachable"] = False
+        record["coverage_status"] = "gap"
+        return [], coverage_gap(route, "http_request_failed", "A successful current-run HTTP response", result.requested_url)
+    if result.truncated:
+        record["coverage_status"] = "gap"
+        return [], coverage_gap(route, "http_body_truncated", "A complete current-run HTTP response", result.requested_url)
+    if 300 <= result.status_code < 400:
+        if record.get("route_kind") == "public":
+            record["route_kind"] = "redirect"
+        record["scored"] = False
+        record["not_scored_reason"] = "runtime_redirect"
+        record["indexability"] = "redirect"
+        record["coverage_status"] = "classified"
+        return [], None
+    if result.status_code >= 400:
+        record["indexability"] = "error"
+        record["coverage_status"] = "verified" if record.get("scored") else "classified"
+        if not record.get("scored"):
+            return [], None
+        if record.get("index_intent") == "index":
+            impact = "P0" if record.get("priority") == "core" else "P1"
+            return [
+                runtime_finding(
+                    record,
+                    result,
+                    "HTTP_UNREACHABLE",
+                    impact,
+                    f"目标页当前返回 HTTP {result.status_code}",
+                    "修复目标路由，使其稳定返回完成主要任务的 200 HTML；若页面不应公开，更新显式索引意图。",
+                )
+            ], None
+        return [
+            runtime_finding(
+                record,
+                result,
+                "HTTP_UNREACHABLE",
+                "P2",
+                f"当前返回 HTTP {result.status_code}，但索引意图未知",
+                "确认该路由是否应公开索引，再决定修复响应或把它分类为非评分路由。",
+                status="Unknown",
+            )
+        ], None
+    if record.get("sentinel_kind") == "soft_404":
+        record["route_kind"] = "error"
+        record["scored"] = False
+        record["not_scored_reason"] = "soft_404_sentinel"
+        record["coverage_status"] = "classified"
+        if not result.content_type or "html" not in result.content_type.lower():
+            record["indexability"] = "unknown"
+            return [], None
+        sentinel_parser = parse_runtime_html(result.text)
+        sentinel_robots = " ".join(
+            value
+            for value in [sentinel_parser.meta.get("robots", ""), result.headers.get("x-robots-tag", "")]
+            if value
+        )
+        record["indexability"] = "noindex" if re.search(r"\bnoindex\b", sentinel_robots, flags=re.I) else "indexable"
+        visible_text = normalize_ws(sentinel_parser.text)
+        visible_h1 = [
+            heading for heading in sentinel_parser.headings
+            if heading.get("level") == 1 and normalize_ws(str(heading.get("text", "")))
+        ]
+        record["signals"] = {
+            "title": sentinel_parser.title,
+            "h1": [heading.get("text", "") for heading in visible_h1],
+            "text_chars": len(visible_text),
+            "robots": sentinel_robots,
+        }
+        if not visible_h1 and re.search(r"\b(?:post|page|article|content)\s+not\s+found\b|^not\s+found$", visible_text, flags=re.I):
+            return [
+                runtime_finding(
+                    record,
+                    result,
+                    "SOFT_404",
+                    "P1",
+                    "明显不存在的 blog slug 返回 200，且可见页面呈现 not found 占位内容",
+                    "对不存在实体返回真实 404/410 或明确跳转，不要输出可索引的 200 占位页。",
+                )
+            ], None
+        return [], None
+    if not record.get("scored"):
+        header_robots = result.headers.get("x-robots-tag", "")
+        record["indexability"] = "noindex" if re.search(r"\bnoindex\b", header_robots, flags=re.I) else "unknown"
+        record["coverage_status"] = "classified"
+        return [], None
+    if not result.content_type or "html" not in result.content_type.lower():
+        record["coverage_status"] = "verified"
+        record["indexability"] = "unknown"
+        status = "Confirmed" if record.get("index_intent") == "index" else "Unknown"
+        return [
+            runtime_finding(
+                record,
+                result,
+                "RENDERED_CONTENT_MISSING",
+                "P1" if status == "Confirmed" else "P2",
+                f"公开页面返回 Content-Type {result.content_type or 'missing'}，没有可评分 HTML",
+                "让公开目标路由返回包含页面主内容的 HTML，或将数据端点正确分类为 API。",
+                status=status,
+            )
+        ], None
+
+    html_parser = parse_runtime_html(result.text)
+    robots = " ".join(
+        value for value in [html_parser.meta.get("robots", ""), result.headers.get("x-robots-tag", "")] if value
+    )
+    record["indexability"] = "noindex" if re.search(r"\bnoindex\b", robots, flags=re.I) else "indexable"
+    record["coverage_status"] = "verified"
+    record["signals"] = {
+        "title": html_parser.title,
+        "description": html_parser.meta.get("description", ""),
+        "canonical": html_parser.canonicals[0] if html_parser.canonicals else "",
+        "h1": [heading.get("text", "") for heading in html_parser.headings if heading.get("level") == 1],
+        "text_chars": len(html_parser.text),
+        "internal_link_count": classify_links(html_parser.links, domain)[0],
+        "json_ld_count": html_parser.json_ld_count,
+        "robots": robots,
+    }
+    findings: List[Dict[str, object]] = []
+    if record.get("index_intent") == "index" and record.get("indexability") == "noindex":
+        impact = "P0" if record.get("priority") == "core" else "P1"
+        findings.append(
+            runtime_finding(
+                record,
+                result,
+                "INDEX_INTENT_CONFLICT",
+                impact,
+                f"目标页意图为 index，但当前响应 robots 信号为 {robots}",
+                "移除目标页 noindex，或把显式 index intent 改为 noindex 并从 sitemap/公开入口移除。",
+            )
+        )
+    intent_status = "Confirmed" if record.get("index_intent") == "index" else "Unknown"
+    if not html_parser.title:
+        findings.append(
+            runtime_finding(
+                record,
+                result,
+                "TITLE_MISSING",
+                "P1" if intent_status == "Confirmed" else "P3",
+                "当前 HTML 没有可用 title",
+                "为该目标页输出能明确表达页面任务的 title。",
+                status=intent_status,
+            )
+        )
+    h1s = [heading for heading in html_parser.headings if heading.get("level") == 1 and normalize_ws(str(heading.get("text", "")))]
+    if not h1s:
+        findings.append(
+            runtime_finding(
+                record,
+                result,
+                "MAIN_HEADING_UNCLEAR",
+                "P1" if intent_status == "Confirmed" else "P3",
+                "当前 HTML 没有可识别的主 H1",
+                "输出一个清晰表达页面主任务的可见主标题。",
+                status=intent_status,
+            )
+        )
+    description = html_parser.meta.get("description", "")
+    if not description:
+        findings.append(
+            runtime_finding(
+                record,
+                result,
+                "DESCRIPTION_GAP",
+                "P3",
+                "当前 HTML 没有 meta description",
+                "结合页面搜索意图补充准确摘要；此项本身不作为索引阻断。",
+                status=intent_status,
+            )
+        )
+    canonical = html_parser.canonicals[0] if html_parser.canonicals else ""
+    if not canonical:
+        findings.append(
+            runtime_finding(
+                record,
+                result,
+                "CANONICAL_GAP",
+                "P3",
+                "当前 HTML 没有 canonical；尚无重复 URL 证据",
+                "如该页存在重复 URL，再补充一致的规范化信号；否则仅作为增强项。",
+                status=intent_status,
+            )
+        )
+    elif domain and is_absolute_http_url(canonical):
+        canonical_host = urlparse(canonical).netloc.lower()
+        domain_host = urlparse(domain).netloc.lower()
+        canonical_route = normalize_route_path(canonical)
+        route_conflict = canonical_route is not None and canonical_route != normalize_route_path(route)
+        if canonical_host != domain_host or (intent_status == "Confirmed" and route_conflict):
+            conflict = (
+                f"canonical 主机 {canonical_host} 与生产域名 {domain_host} 不一致"
+                if canonical_host != domain_host
+                else f"显式 index 路由 {route} 的 canonical 指向 {canonical_route}"
+            )
+            findings.append(
+                runtime_finding(
+                    record,
+                    result,
+                    "CANONICAL_CONFLICT",
+                    "P0" if record.get("priority") == "core" and intent_status == "Confirmed" else "P1",
+                    conflict,
+                    "把 canonical 指向该页面的正确生产规范 URL，并核对重复 URL 信号。",
+                    status=intent_status,
+                )
+            )
+    invalid_json_ld = 0
+    for block in html_parser.json_ld_blocks:
+        try:
+            json.loads(block)
+        except (json.JSONDecodeError, TypeError):
+            invalid_json_ld += 1
+    record["signals"]["json_ld_invalid_count"] = invalid_json_ld
+    if invalid_json_ld:
+        findings.append(
+            runtime_finding(
+                record,
+                result,
+                "STRUCTURED_DATA_INVALID",
+                "P2",
+                f"当前 HTML 有 {invalid_json_ld} 个无法解析的 JSON-LD 块",
+                "修复 JSON-LD 语法，并确认结构化数据与页面可见事实一致。",
+                status=intent_status,
+            )
+        )
+    if not html_parser.text:
+        findings.append(
+            runtime_finding(
+                record,
+                result,
+                "RENDERED_CONTENT_MISSING",
+                "P1" if intent_status == "Confirmed" else "P3",
+                "当前 HTML 没有可见正文",
+                "在初始 HTML 中输出完成页面主要任务所需的可见内容。",
+                status=intent_status,
+            )
+        )
+    if any(not image.get("alt_present") for image in html_parser.images):
+        findings.append(
+            runtime_finding(
+                record,
+                result,
+                "IMAGE_ALT_MISSING",
+                "P2",
+                "当前 HTML 存在没有 alt 属性的图片",
+                "为信息图片添加描述性 alt；装饰图使用合法的 alt=\"\"。",
+                status=intent_status,
+            )
+        )
+    return findings, None
+
+
+def source_commit(root: Path) -> Optional[str]:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = completed.stdout.strip()
+    return value if completed.returncode == 0 and re.fullmatch(r"[0-9a-fA-F]{40}", value) else None
+
+
+def framework_slug(project: Dict[str, object]) -> str:
+    stack = [str(item).lower() for item in project.get("stack", [])]
+    for label, slug in [
+        ("next.js", "nextjs"),
+        ("nuxt", "nuxt"),
+        ("astro", "astro"),
+        ("sveltekit", "sveltekit"),
+        ("gatsby", "gatsby"),
+        ("vite", "vite"),
+        ("react", "react"),
+    ]:
+        if any(label in item for item in stack):
+            return slug
+    return "unknown"
+
+
+NEXT_PAGE_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx", ".md", ".mdx"}
+
+
+def next_url_segments(segments: List[str]) -> Optional[List[str]]:
+    output: List[str] = []
+    for segment in segments:
+        if not segment:
+            continue
+        if segment.startswith("_"):
+            return None
+        if segment.startswith("@"):
+            continue
+        if re.fullmatch(r"\([^)]*\)", segment):
+            continue
+        interception = re.match(r"^\((?:\.{1,3})\)(.*)$", segment)
+        if interception:
+            segment = interception.group(1)
+            if not segment:
+                continue
+        output.append(segment)
+    return output
+
+
+def next_route_from_segments(segments: List[str]) -> Optional[str]:
+    normalized = next_url_segments(segments)
+    if normalized is None:
+        return None
+    return "/" + "/".join(normalized) if normalized else "/"
+
+
+def next_layout_metadata_sources(page_path: Path, app_root: Path, root: Path) -> List[str]:
+    sources: List[str] = []
+    current = page_path.parent
+    while current == app_root or app_root in current.parents:
+        for suffix in [".ts", ".tsx", ".js", ".jsx"]:
+            layout = current / f"layout{suffix}"
+            if not layout.is_file():
+                continue
+            state = read_text_state(layout)
+            if state.error or state.truncated:
+                continue
+            if re.search(r"\b(?:metadata|generateMetadata)\b|<title\b|<meta\b", state.text, flags=re.I):
+                sources.append(rel_posix(layout, root))
+        if current == app_root:
+            break
+        current = current.parent
+    return sorted(set(sources))
+
+
+def discover_next_routes(root: Path, all_files: List[Path]) -> List[Dict[str, object]]:
+    candidates: List[Dict[str, object]] = []
+    for path in all_files:
+        relative = rel_posix(path, root)
+        parts = relative.split("/")
+        app_index = None
+        if parts and parts[0] == "app":
+            app_index = 0
+        elif len(parts) > 1 and parts[:2] == ["src", "app"]:
+            app_index = 1
+        if app_index is not None:
+            app_root = root.joinpath(*parts[: app_index + 1])
+            filename = parts[-1]
+            stem = Path(filename).stem
+            suffix = Path(filename).suffix.lower()
+            segments = parts[app_index + 1 : -1]
+            route = next_route_from_segments(segments)
+            if route is None:
+                continue
+            data: Optional[Dict[str, object]] = None
+            if stem == "page" and suffix in NEXT_PAGE_EXTENSIONS:
+                data = {
+                    "route": route,
+                    "route_kind": classify_route_kind(route),
+                    "path": relative,
+                    "metadata_sources": next_layout_metadata_sources(path, app_root, root),
+                }
+            elif stem in {
+                "robots",
+                "sitemap",
+                "manifest",
+                "opengraph-image",
+                "twitter-image",
+                "icon",
+                "apple-icon",
+            } and suffix in NEXT_PAGE_EXTENSIONS:
+                endpoint = {
+                    "robots": "robots.txt",
+                    "sitemap": "sitemap.xml",
+                    "manifest": "manifest.webmanifest",
+                    "opengraph-image": "opengraph-image",
+                    "twitter-image": "twitter-image",
+                    "icon": "icon",
+                    "apple-icon": "apple-icon",
+                }[stem]
+                data = {
+                    "route": (route.rstrip("/") + "/" + endpoint) if route != "/" else "/" + endpoint,
+                    "route_kind": "metadata",
+                    "path": relative,
+                    "metadata_sources": [],
+                }
+            elif stem == "route" and suffix in NEXT_PAGE_EXTENSIONS:
+                kind = classify_route_kind(route)
+                data = {
+                    "route": route,
+                    "route_kind": kind if kind != "public" else "unknown",
+                    "path": relative,
+                    "metadata_sources": [],
+                }
+            if data:
+                data["is_pattern"] = bool(re.search(r"\[[^]]+\]", str(data["route"])))
+                candidates.append(data)
+            continue
+
+        pages_index = None
+        if parts and parts[0] == "pages":
+            pages_index = 0
+        elif len(parts) > 1 and parts[:2] == ["src", "pages"]:
+            pages_index = 1
+        if pages_index is None or path.suffix.lower() not in NEXT_PAGE_EXTENSIONS:
+            continue
+        route_parts = parts[pages_index + 1 :]
+        filename_stem = Path(route_parts[-1]).stem
+        if filename_stem in {"_app", "_document", "_error"}:
+            continue
+        route_parts[-1] = filename_stem
+        if filename_stem == "index":
+            route_parts = route_parts[:-1]
+        route = next_route_from_segments(route_parts)
+        if route is None:
+            continue
+        kind = classify_route_kind(route)
+        if filename_stem in {"404", "500"}:
+            kind = "error"
+        candidates.append(
+            {
+                "route": route,
+                "route_kind": kind,
+                "path": relative,
+                "metadata_sources": [],
+                "is_pattern": bool(re.search(r"\[[^]]+\]", route)),
+            }
+        )
+    return candidates
+
+
+def discover_supported_locales(all_files: List[Path]) -> Tuple[Optional[set], Optional[str]]:
+    locale_sets: List[set] = []
+    defaults: List[str] = []
+    for path in all_files:
+        relative = str(path).lower().replace("\\", "/")
+        if "locale" not in relative and "i18n" not in relative:
+            continue
+        if path.suffix.lower() not in SOURCE_EXTS | {".mjs", ".cjs"}:
+            continue
+        state = read_text_state(path)
+        if state.error or state.truncated:
+            continue
+        for match in re.finditer(r"\blocales\b\s*(?::[^=]+)?=\s*\[([^\]]{0,500})\]", state.text, flags=re.S):
+            values = set(re.findall(r"['\"]([A-Za-z]{2}(?:-[A-Za-z]{2})?)['\"]", match.group(1)))
+            if values:
+                locale_sets.append(values)
+        for match in re.finditer(r"\bdefaultLocale\b\s*(?::[^=]+)?=\s*['\"]([A-Za-z]{2}(?:-[A-Za-z]{2})?)['\"]", state.text):
+            defaults.append(match.group(1))
+    supported = set.intersection(*locale_sets) if locale_sets else None
+    default = defaults[0] if defaults else (sorted(supported)[0] if supported else None)
+    return supported, default
+
+
+def discover_fumadocs_registry(root: Path, all_files: List[Path]) -> List[Dict[str, object]]:
+    collection_dirs: List[str] = []
+    for path in all_files:
+        if not re.fullmatch(r"source\.config\.(?:ts|js|mjs)", path.name, flags=re.I):
+            continue
+        state = read_text_state(path)
+        if state.error or state.truncated:
+            continue
+        collection_dirs.extend(
+            match.group(1).strip("/")
+            for match in re.finditer(
+                r"defineDocs\s*\(\s*\{[^{}]{0,1000}?\bdir\s*:\s*['\"]([^'\"]+)['\"]",
+                state.text,
+                flags=re.S,
+            )
+        )
+    supported_locales, default_locale = discover_supported_locales(all_files)
+    candidates: List[Dict[str, object]] = []
+    for collection_dir in sorted(set(collection_dirs)):
+        collection_path = root / collection_dir
+        collection_name = Path(collection_dir).name.lower()
+        base_path = {"posts": "/blog", "pages": "", "docs": "/docs", "logs": "/logs"}.get(
+            collection_name,
+            "/" + collection_name,
+        )
+        for path in all_files:
+            try:
+                relative_content = path.relative_to(collection_path)
+            except ValueError:
+                continue
+            if path.suffix.lower() not in {".md", ".mdx"}:
+                continue
+            content_parts = list(relative_content.parts)
+            filename = Path(content_parts[-1])
+            stem = filename.stem
+            locale = None
+            locale_match = re.match(r"^(.*)\.([A-Za-z]{2}(?:-[A-Za-z]{2})?)$", stem)
+            if locale_match:
+                stem = locale_match.group(1)
+                locale = locale_match.group(2)
+            content_parts[-1] = stem
+            if content_parts[-1].lower() == "index":
+                content_parts = content_parts[:-1]
+            slug = "/".join(part for part in content_parts if part)
+            route = (base_path.rstrip("/") + ("/" + slug if slug else "")) or "/"
+            invalid_locale = bool(locale and (supported_locales is None or locale not in supported_locales))
+            if locale and locale != default_locale:
+                route = "/" + locale + (route if route != "/" else "")
+            candidates.append(
+                {
+                    "route": route,
+                    "route_kind": "unregistered" if invalid_locale else "public",
+                    "path": rel_posix(path, root),
+                    "is_pattern": False,
+                    "registry_collection": collection_name,
+                    "registry_status": "invalid_locale" if invalid_locale else "registered",
+                    "is_article": collection_name == "posts" and not invalid_locale,
+                    "locale": locale or default_locale,
+                }
+            )
+    return candidates
+
+
+def discover_locale_message_registry(root: Path, all_files: List[Path]) -> List[Dict[str, object]]:
+    registered_paths: set = set()
+    for path in all_files:
+        relative = rel_posix(path, root).lower()
+        if "locale" not in relative and "i18n" not in relative:
+            continue
+        if path.suffix.lower() not in SOURCE_EXTS | {".mjs", ".cjs"}:
+            continue
+        state = read_text_state(path)
+        if state.error or state.truncated:
+            continue
+        for match in re.finditer(
+            r"\blocaleMessagesPaths\b\s*(?::[^=]+)?=\s*\[([^\]]{0,20000})\]",
+            state.text,
+            flags=re.S,
+        ):
+            registered_paths.update(
+                value.strip("/")
+                for value in re.findall(r"['\"]([^'\"]+)['\"]", match.group(1))
+                if value.strip("/").startswith("pages/")
+            )
+
+    supported_locales, default_locale = discover_supported_locales(all_files)
+    candidates: List[Dict[str, object]] = []
+    pattern = re.compile(r"(?:^|/)locale/messages/([^/]+)/pages/(.+)\.json$", flags=re.I)
+    for path in all_files:
+        relative = rel_posix(path, root)
+        match = pattern.search(relative)
+        if not match:
+            continue
+        locale = match.group(1)
+        content_path = "pages/" + match.group(2).strip("/")
+        is_registered = content_path in registered_paths
+        invalid_locale = bool(supported_locales is not None and locale not in supported_locales)
+        route = "/" + content_path[len("pages/") :]
+        if locale != default_locale:
+            route = "/" + locale + route
+        candidates.append(
+            {
+                "route": route,
+                "route_kind": "public" if is_registered and not invalid_locale else "unregistered",
+                "path": relative,
+                "is_pattern": False,
+                "registry_collection": "locale_messages_pages",
+                "registry_status": (
+                    "registered" if is_registered and not invalid_locale else (
+                        "invalid_locale" if invalid_locale else "unregistered"
+                    )
+                ),
+                "is_article": False,
+                "locale": locale,
+                "source": "registry" if is_registered and not invalid_locale else "content_inventory",
+            }
+        )
+    return candidates
+
+
+def discover_rendered_routes(rendered_root: Path) -> List[Dict[str, object]]:
+    if not rendered_root.is_dir() or rendered_root.is_symlink():
+        return []
+    root_resolved = rendered_root.resolve()
+    candidates: List[Dict[str, object]] = []
+    for dirpath, dirnames, filenames in os.walk(rendered_root):
+        current = Path(dirpath)
+        dirnames[:] = [
+            name for name in dirnames
+            if not (current / name).is_symlink()
+            and (current / name).resolve().is_relative_to(root_resolved)
+        ]
+        for filename in filenames:
+            path = current / filename
+            if path.suffix.lower() not in HTML_EXTS or path.is_symlink():
+                continue
+            try:
+                resolved = path.resolve()
+                resolved.relative_to(root_resolved)
+            except (OSError, ValueError):
+                continue
+            candidates.append(
+                {
+                    "route": html_source_route(path, rendered_root),
+                    "route_kind": "public",
+                    "path": rel_posix(path, rendered_root),
+                    "rendered_path": rel_posix(path, rendered_root),
+                    "is_pattern": False,
+                }
+            )
+    return sorted(candidates, key=lambda item: (str(item["route"]), str(item["path"])))
+
+
+def rendered_http_result(path: Path, safe_path: str, route: str, domain: Optional[str]) -> HTTPResult:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        return HTTPResult(safe_path, None, {}, b"", "", False, type(exc).__name__, None, None, "text/html")
+    truncated = len(data) > MAX_HTTP_BYTES
+    data = data[:MAX_HTTP_BYTES]
+    final_url = domain.rstrip("/") + route if domain else route
+    return HTTPResult(
+        safe_path,
+        200,
+        {"content-type": "text/html; charset=utf-8"},
+        data,
+        decode_http_body(data, "text/html; charset=utf-8"),
+        truncated,
+        None,
+        None,
+        final_url,
+        "text/html; charset=utf-8",
+    )
+
+
+def coverage_contract(
+    routes: List[Dict[str, object]],
+    findings: List[Dict[str, object]],
+    gaps: List[Dict[str, object]],
+) -> Dict[str, object]:
+    confirmed = Counter(
+        str(finding.get("impact")) for finding in findings if finding.get("status") == "Confirmed"
+    )
+    by_source = Counter()
+    by_kind = Counter()
+    for route in routes:
+        by_kind[str(route.get("route_kind") or "unknown")] += 1
+        for source in route.get("sources", []):
+            by_source[str(source)] += 1
+    verified = sum(1 for route in routes if route.get("scored") and route.get("coverage_status") == "verified")
+    complete = bool(routes) and not gaps and all(
+        route.get("coverage_status") in {"verified", "classified"} for route in routes
+    )
+    counts = {impact: confirmed.get(impact, 0) for impact in ["P0", "P1", "P2", "P3"]}
+    return {
+        "target_total": len(routes),
+        "verified_total": verified,
+        "gap_total": len(gaps),
+        "complete": complete,
+        "by_source": dict(sorted(by_source.items())),
+        "by_route_kind": dict(sorted(by_kind.items())),
+        "gaps": gaps,
+        "confirmed_counts": counts,
+        # Compatibility aliases retained for schema-v1 consumers during migration.
+        "target_routes": len(routes),
+        "verified_routes": verified,
+    }
 
 
 def write_markdown(result: Dict[str, object], output_path: Path) -> None:
-    issues = collect_issues(result)
-    counts = Counter(issue.get("severity", "P3") for issue in issues)
-    html_pages = result.get("html_pages", [])
-    project = result.get("project", {})
+    findings = list(result.get("findings", []))
+    coverage = dict(result.get("coverage", {}))
+    scope = dict(result.get("scope", {}))
+    confirmed_counts = dict(result.get("summary", {}).get("confirmed_by_impact", {}))
 
-    lines: List[str] = []
-    lines.append("# SEO 代码静态诊断报告")
-    lines.append("")
-    lines.append(f"生成时间：{result.get('generated_at')}  ")
-    lines.append(f"扫描根目录：`{escape_md(result.get('root'))}`  ")
-    if result.get("domain"):
-        lines.append(f"目标域名：`{escape_md(result.get('domain'))}`  ")
-    if result.get("keywords"):
-        lines.append(f"目标关键词：`{escape_md(', '.join(result.get('keywords', [])))}`  ")
-    lines.append("")
+    lines: List[str] = [
+        "# SEO Code Diagnostic 报告（schema v2）",
+        "",
+        f"生成时间：{escape_md(result.get('generated_at'))}  ",
+        f"扫描根目录：`{escape_md(scope.get('root'))}`  ",
+    ]
+    if scope.get("domain"):
+        lines.append(f"目标域名：`{escape_md(scope.get('domain'))}`  ")
+    if scope.get("base_url"):
+        lines.append(f"验证地址：`{escape_md(scope.get('base_url'))}`  ")
+    lines.extend(["", "## 结论"])
 
-    lines.append("## 一句话结论")
-    if counts.get("P0"):
-        lines.append(f"发现 {counts.get('P0')} 个 P0 阻断型问题，优先检查抓取/索引/渲染/canonical。")
-    elif counts.get("P1"):
-        lines.append(f"未发现 P0，但有 {counts.get('P1')} 个 P1 高影响问题，优先修复 TDK、H1、canonical、sitemap 或 metadata。")
-    elif issues:
-        lines.append("未发现明显阻断型问题，主要优化空间在内容覆盖、内链、图片和结构化数据。")
+    confirmed_p0_p2 = sum(int(confirmed_counts.get(impact, 0) or 0) for impact in ["P0", "P1", "P2"])
+    if not coverage.get("complete"):
+        lines.append(
+            f"覆盖不完整；当前仅确认 Confirmed P0-P2 = {confirmed_p0_p2}，不能据此给出全站清洁结论。"
+        )
+    elif confirmed_p0_p2:
+        lines.append(f"Confirmed P0-P2 = {confirmed_p0_p2}；按影响级别处理下表中的已确认问题。")
     else:
-        lines.append("未发现脚本可识别的明显 SEO 问题；仍建议人工检查搜索意图、竞品内容差距和线上抓取结果。")
+        lines.append("目标路由覆盖完整，Confirmed P0-P2 = 0。")
+    lines.extend(
+        [
+            "",
+            "## Evidence gate 汇总",
+            "| 影响 | Confirmed 数量 |",
+            "|---|---:|",
+        ]
+    )
+    for impact in ["P0", "P1", "P2", "P3"]:
+        lines.append(f"| {impact} | {int(confirmed_counts.get(impact, 0) or 0)} |")
     lines.append("")
 
-    lines.append("## 项目识别")
-    lines.append(f"- 技术栈：{escape_md(', '.join(project.get('stack', [])))}")
-    if project.get("route_dirs"):
-        lines.append(f"- 路由/内容目录：`{escape_md(', '.join(project.get('route_dirs', [])))}`")
-    if project.get("seo_files"):
-        lines.append(f"- SEO 文件：`{escape_md(', '.join(project.get('seo_files', [])))}`")
-    if project.get("config_files"):
-        lines.append(f"- 配置文件：`{escape_md(', '.join(project.get('config_files', [])))}`")
-    lines.append("")
-
-    lines.append("## 优先级总览")
-    lines.append("| 优先级 | 数量 | 含义 |")
-    lines.append("|---|---:|---|")
-    meaning = {
-        "P0": "阻断抓取、索引或核心 HTML 可见性的风险",
-        "P1": "高影响 on-page/technical SEO 问题",
-        "P2": "内容、内链、语义、图片等中影响问题",
-        "P3": "增强项和细节优化",
-    }
-    for sev in ["P0", "P1", "P2", "P3"]:
-        lines.append(f"| {sev} | {counts.get(sev, 0)} | {meaning[sev]} |")
-    lines.append("")
-
-    if issues:
-        lines.append("## 发现的问题")
-        lines.append("| 优先级 | 代码 | 文件 | 证据 | 建议 |")
-        lines.append("|---|---|---|---|---|")
-        for issue in issues[:120]:
+    gaps = list(coverage.get("gaps", []))
+    lines.extend(
+        [
+            "## Coverage",
+            f"- 目标路由：{int(coverage.get('target_routes', 0) or 0)}",
+            f"- 已验证路由：{int(coverage.get('verified_routes', 0) or 0)}",
+            f"- 完整：{'是' if coverage.get('complete') else '否'}",
+            "",
+        ]
+    )
+    if gaps:
+        lines.extend(["| 路由 | 缺口原因 | 需要的证据 | 路径/URL |", "|---|---|---|---|"])
+        for gap in gaps:
             lines.append(
-                f"| {escape_md(issue.get('severity'))} | {escape_md(issue.get('code'))} | `{escape_md(issue.get('file'))}` | {escape_md(issue.get('evidence'))} | {escape_md(issue.get('recommendation'))} |"
-            )
-        if len(issues) > 120:
-            lines.append(f"\n仅展示前 120 条，完整结果见 JSON，共 {len(issues)} 条。")
-        lines.append("")
-
-    if html_pages:
-        lines.append("## HTML 页面摘要")
-        lines.append("| 文件 | Title | H1 | 文本字符 | 图片/缺 alt | 内链 | Canonical |")
-        lines.append("|---|---|---|---:|---:|---:|---|")
-        for page in html_pages[:80]:
-            h1 = "; ".join(str(x) for x in page.get("h1", []))
-            img = f"{page.get('image_count', 0)}/{page.get('images_missing_alt', 0)}"
-            lines.append(
-                f"| `{escape_md(page.get('file'))}` | {escape_md(page.get('title'))} | {escape_md(h1)} | {page.get('text_chars', 0)} | {img} | {page.get('internal_links', 0)} | {escape_md(page.get('canonical'))} |"
+                f"| {escape_md(gap.get('route'))} | {escape_md(gap.get('reason'))} | "
+                f"{escape_md(gap.get('evidence_needed'))} | {escape_md(gap.get('path_or_url'))} |"
             )
         lines.append("")
 
-    if result.get("keywords") and html_pages:
-        lines.append("## 关键词密度辅助检查")
-        lines.append("关键词密度不是目标本身，只用来发现“完全没覆盖”或“机械堆砌”。")
-        lines.append("")
-        lines.append("| 文件 | 关键词 | 出现次数 | 估算密度 |")
-        lines.append("|---|---|---:|---:|")
-        for page in html_pages[:80]:
-            for kd in page.get("keyword_density", []):
-                lines.append(
-                    f"| `{escape_md(page.get('file'))}` | {escape_md(kd.get('keyword'))} | {kd.get('count', 0)} | {kd.get('density_percent', 0)}% |"
-                )
-        lines.append("")
-
-    source_summary = result.get("source_audit", {}).get("summary", {})
-    if source_summary:
-        lines.append("## 源码 SEO 信号")
-        lines.append(f"- 扫描源码文件：{source_summary.get('files_scanned', 0)}")
-        for key, label in [
-            ("route_files", "疑似路由文件"),
-            ("metadata_files", "含 metadata/head 的文件"),
-            ("canonical_mentions", "提到 canonical 的文件"),
-            ("h1_mentions", "包含 H1 的文件"),
-            ("json_ld_mentions", "包含 JSON-LD/schema 的文件"),
-            ("client_page_risks", "Next page `use client` 风险文件"),
-            ("img_without_alt_suspects", "疑似图片缺 alt 文件"),
-        ]:
-            values = source_summary.get(key, [])
-            if values:
-                preview = ", ".join(values[:12])
-                suffix = " ..." if len(values) > 12 else ""
-                lines.append(f"- {label}：`{escape_md(preview + suffix)}`")
-        lines.append("")
-
-    if result.get("adsense_audit"):
-        write_adsense_markdown(lines, result.get("adsense_audit", {}))
-
-    lines.append("## 建议下一步")
-    lines.append("1. 先修 P0/P1：抓取、索引、SSR/SSG、title、description、H1、canonical、sitemap。")
-    lines.append("2. 再做关键词-页面映射：确认首页、二级目录、三级目录、详情页分别承载哪些词。")
-    lines.append("3. 对核心落地页补齐模块：工具入口、How it works、Features、场景、FAQ、证言、相关链接、CTA。")
-    lines.append("4. 加强内链：上级页链接下级页，下级页用明确锚文本链接回上级页，所有核心页自然链接到首页或支柱页。")
-    lines.append("5. 构建后查看网页源代码，确认核心文案、TDK、H1/H2/H3、canonical、JSON-LD 都在 HTML 中可见。")
+    link_analysis = dict(result.get("link_analysis", {}))
+    lines.extend(
+        [
+            "## 互链验证",
+            f"- 状态：{escape_md(link_analysis.get('status'))}",
+            f"- 候选站外主机：{int(link_analysis.get('candidate_domain_total', 0) or 0)}",
+            f"- 已选择主机：{int(link_analysis.get('selected_domain_total', 0) or 0)}",
+            f"- 观察到回链的主机：{int(link_analysis.get('reciprocal_domain_total', 0) or 0)}",
+        ]
+    )
+    if link_analysis.get("reason"):
+        lines.append(f"- 未运行原因：{escape_md(link_analysis.get('reason'))}")
+    if link_analysis.get("gaps"):
+        lines.append(f"- 独立验证缺口：{len(link_analysis.get('gaps', []))}")
     lines.append("")
+
+    lines.extend(
+        [
+            "## Findings",
+            "| 状态 | 影响 | 规则 | 路由 | 证据类型 | 路径/URL | 证据 |",
+            "|---|---|---|---|---|---|---|",
+        ]
+    )
+    for finding in findings:
+        lines.append(
+            f"| {escape_md(finding.get('status'))} | {escape_md(finding.get('impact'))} | "
+            f"{escape_md(finding.get('code'))} | {escape_md(finding.get('route'))} | "
+            f"{escape_md(finding.get('evidence_kind'))} | {escape_md(finding.get('path_or_url'))} | "
+            f"{escape_md(finding.get('evidence'))} |"
+        )
+    if not findings:
+        lines.append("| Unknown | - | NO_EVIDENCE |  | coverage_gap |  | 尚无足够证据。 |")
+    lines.append("")
+
+    unmapped_keywords = list(scope.get("unmapped_keywords", []))
+    if unmapped_keywords:
+        lines.extend(
+            [
+                "## 未映射关键词",
+                "这些词只作为待映射清单，不应用到每个页面：",
+                "",
+                *[f"- {escape_md(keyword)}" for keyword in unmapped_keywords],
+                "",
+            ]
+        )
+
+    adsense = dict(result.get("adsense", {}))
+    if adsense.get("enabled"):
+        lines.extend(
+            [
+                "## AdSense",
+                f"- 状态：{escape_md(adsense.get('status'))}",
+                f"- Readiness：{escape_md(adsense.get('readiness') or 'undetermined')}",
+                f"- 已验证文章路由：{int(adsense.get('article_count', 0) or 0)}",
+                f"- 检查项：{int(adsense.get('reported_total', 0) or 0)}/{int(adsense.get('requirement_total', 0) or 0)}",
+                f"- 证据完整：{'是' if adsense.get('complete') else '否'}",
+                "",
+                "| ADS ID | Severity | Status | Effort | Evidence | Next action |",
+                "|---|---|---|---|---|---|",
+            ]
+        )
+        for item in adsense.get("items", []):
+            lines.append(
+                f"| {escape_md(item.get('id'))} | {escape_md(item.get('severity'))} | "
+                f"{escape_md(item.get('status'))} | {escape_md(item.get('effort'))} | "
+                f"{escape_md(item.get('evidence'))} | "
+                f"{escape_md(item.get('next_action'))} |"
+            )
+        remediation_order = list(adsense.get("remediation_order", []))
+        if remediation_order:
+            lines.extend(["", "修复顺序：" + " → ".join(escape_md(item) for item in remediation_order)])
+        lines.append("")
 
     output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def stable_result_hash(result: Dict[str, object]) -> str:
+    comparable = json.loads(json.dumps(result, ensure_ascii=False))
+
+    def remove_volatile_runtime_digests(value: object) -> None:
+        if isinstance(value, list):
+            for item in value:
+                remove_volatile_runtime_digests(item)
+            return
+        if not isinstance(value, dict):
+            return
+        if value.get("mode") in {"runtime", "current_rendered"}:
+            value.pop("content_hash", None)
+        for item in value.values():
+            remove_volatile_runtime_digests(item)
+
+    comparable.pop("generated_at", None)
+    scope = comparable.get("scope")
+    if isinstance(scope, dict):
+        scope.pop("started_at", None)
+        scope.pop("output_paths", None)
+        provenance = scope.get("provenance")
+        if isinstance(provenance, dict):
+            provenance.pop("result_hash", None)
+    remove_volatile_runtime_digests(comparable)
+    encoded = json.dumps(comparable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 # ---------- main ----------
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(
+    argv: Optional[List[str]] = None,
+    *,
+    reciprocal_fetcher: Optional[Callable[[str], ExternalHTTPResult]] = None,
+) -> int:
     parser = argparse.ArgumentParser(description="Offline static SEO code audit helper.")
     parser.add_argument("--root", default=".", help="Repository/site root to scan.")
     parser.add_argument("--domain", default="", help="Canonical production domain, e.g. https://example.com")
     parser.add_argument("--keywords", default="", help="Comma-separated target keywords for density checks.")
     parser.add_argument("--adsense", action="store_true", help="Add AdSense approval-readiness checks for game/tool/content sites.")
+    parser.add_argument(
+        "--adsense-assessments",
+        default="",
+        help="Validated 73-item AdSense assessment JSON; requires --adsense and --domain.",
+    )
     parser.add_argument("--out", default="seo-audit", help="Output prefix, without extension.")
+    parser.add_argument("--base-url", default="", help="Local or remote HTTP origin reserved for URL-level verification.")
+    parser.add_argument("--routes-file", default="", help="JSON route intent mapping.")
+    parser.add_argument("--rendered-root", default="", help="Static output produced by the current audit run.")
+    parser.add_argument("--exclude", action="append", default=[], help="Additional root-relative glob to exclude; repeatable.")
+    parser.add_argument(
+        "--reciprocal-links",
+        choices=["auto", "off"],
+        default="auto",
+        help="Check bounded public reciprocal links in runtime mode; use off to prevent third-party requests.",
+    )
     args = parser.parse_args(argv)
+    if args.base_url and args.rendered_root:
+        parser.error("--base-url and --rendered-root cannot be used together")
+    if args.base_url:
+        parsed_base_url = urlparse(args.base_url)
+        if (
+            parsed_base_url.scheme.lower() not in {"http", "https"}
+            or not parsed_base_url.hostname
+            or parsed_base_url.username is not None
+            or parsed_base_url.password is not None
+        ):
+            parser.error("--base-url must be an HTTP(S) origin without userinfo")
 
     root = Path(args.root).resolve()
     if not root.exists() or not root.is_dir():
@@ -1168,17 +3246,385 @@ def main(argv: Optional[List[str]] = None) -> int:
     domain = normalize_domain(args.domain)
     keywords = [normalize_ws(x) for x in args.keywords.split(",") if normalize_ws(x)]
 
-    all_files = [p for p in iter_files(root)]
+    assessment_path: Optional[Path] = None
+    assessment_payload: Optional[Dict[str, object]] = None
+    assessment_scope: Dict[str, object] = {"mode": "not_provided", "sha256": None}
+    if args.adsense_assessments:
+        if not args.adsense or not domain:
+            parser.error("--adsense-assessments requires both --adsense and --domain")
+        assessment_path = Path(args.adsense_assessments).resolve()
+        try:
+            assessment_bytes = assessment_path.read_bytes()
+            loaded_assessments = json.loads(assessment_bytes.decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            parser.error(f"unable to read --adsense-assessments: {type(exc).__name__}")
+        assessment_errors = validate_assessments(loaded_assessments, expected_domain=domain)
+        if assessment_errors:
+            parser.error("invalid --adsense-assessments:\n- " + "\n- ".join(assessment_errors))
+        assessment_payload = loaded_assessments
+        assessment_scope = {
+            "mode": "provided",
+            "sha256": hashlib.sha256(assessment_bytes).hexdigest(),
+        }
+
+    out_prefix = Path(args.out)
+    if not out_prefix.is_absolute():
+        if args.out == "seo-audit":
+            out_prefix = root.parent / f"{root.name}-seo-audit"
+        else:
+            out_prefix = Path.cwd() / out_prefix
+    json_path = out_prefix.with_suffix(".json")
+    md_path = out_prefix.with_suffix(".md")
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    started_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    base_url = args.base_url.rstrip("/")
+    runtime_enabled = bool(base_url)
+    rendered_root = Path(args.rendered_root).resolve() if args.rendered_root else None
+    excluded_input_paths = [json_path, md_path]
+    if assessment_path is not None:
+        excluded_input_paths.append(assessment_path)
+    inventory_files = [p for p in iter_files(root, args.exclude, excluded_input_paths)]
+    fumadocs_candidates = discover_fumadocs_registry(root, inventory_files)
+    locale_message_candidates = discover_locale_message_registry(root, inventory_files)
+    registered_content_paths = {
+        str(candidate.get("path"))
+        for candidate in fumadocs_candidates
+        if candidate.get("registry_status") == "registered" and candidate.get("path")
+    }
+    all_files = [
+        path
+        for path in inventory_files
+        if not is_user_content_file(path, root)
+        or rel_posix(path, root) in registered_content_paths
+    ]
     html_files = [p for p in all_files if p.suffix.lower() in HTML_EXTS]
     source_files = [p for p in all_files if p.suffix.lower() in SOURCE_EXTS]
+    route_entries, routes_file_error = load_routes_file(args.routes_file)
+    routes_by_path = {str(entry["route"]): entry for entry in route_entries}
+    mapped_keyword_keys = {
+        str(keyword).casefold()
+        for entry in route_entries
+        for keyword in entry.get("keywords", [])
+    }
+    unmapped_keywords = [keyword for keyword in keywords if keyword.casefold() not in mapped_keyword_keys]
 
     project = detect_project(root, all_files)
-    html_pages = [audit_html_file(path, root, domain, keywords) for path in html_files]
+    if rendered_root and framework_slug(project) == "nextjs":
+        parser.error("Next.js projects must use a fresh build plus --base-url; --rendered-root is for static frameworks")
+    html_pages = []
+    for path in html_files:
+        page_route = html_source_route(path, root)
+        mapped_keywords = list(routes_by_path.get(page_route, {}).get("keywords", []))
+        page = audit_html_file(path, root, domain, mapped_keywords)
+        page["route"] = page_route
+        html_pages.append(page)
     source_audit = audit_source_files(root, source_files)
     repo_audit = audit_repo_files(root, all_files, domain)
 
+    route_map: Dict[str, Dict[str, object]] = {}
+    for entry in route_entries:
+        merge_route(route_map, entry.get("route"), "routes_file", entry)
+    if framework_slug(project) == "nextjs":
+        for candidate in discover_next_routes(root, all_files):
+            merge_route(route_map, candidate.get("route"), "framework", candidate)
+    for candidate in fumadocs_candidates:
+        merge_route(route_map, candidate.get("route"), "registry", candidate)
+    for candidate in locale_message_candidates:
+        merge_route(route_map, candidate.get("route"), str(candidate.get("source")), candidate)
+    if rendered_root:
+        for candidate in discover_rendered_routes(rendered_root):
+            merge_route(route_map, candidate.get("route"), "rendered", candidate)
+
+    sitemap_result: Optional[HTTPResult] = None
+    robots_result: Optional[HTTPResult] = None
+    sitemap_gaps: List[Dict[str, object]] = []
+    if runtime_enabled:
+        sitemap_routes, sitemap_result, sitemap_gaps = discover_sitemap(base_url, domain)
+        for route in sitemap_routes:
+            merge_route(route_map, route, "sitemap")
+        robots_result = fetch_http(runtime_url(base_url, "/robots.txt"))
+        if (
+            robots_result.error
+            or robots_result.truncated
+            or robots_result.status_code != 200
+        ):
+            sitemap_gaps.append(
+                coverage_gap(
+                    None,
+                    "robots_discovery_failed",
+                    "A complete current robots.txt response with HTTP 200",
+                    robots_result.requested_url,
+                )
+            )
+        local_host = (urlparse(base_url).hostname or "").lower()
+        has_blog_entity = any(
+            path.startswith("/blog/")
+            and path != "/blog/__seo-audit-sentinel__"
+            and not re.search(r"\[[^]]+\]", path)
+            for path in route_map
+        )
+        if local_host in {"127.0.0.1", "localhost", "::1"} and has_blog_entity:
+            sentinel = merge_route(route_map, "/blog/__seo-audit-sentinel__", "sentinel")
+            if sentinel:
+                sentinel.update(
+                    {
+                        "route_kind": "error",
+                        "index_intent": "noindex",
+                        "intent_source": "soft-404-sentinel",
+                        "priority": "sentinel",
+                        "scored": False,
+                        "not_scored_reason": "soft_404_sentinel",
+                        "coverage_status": "classified",
+                        "sentinel_kind": "soft_404",
+                    }
+                )
+
+    resolve_dynamic_patterns(route_map)
+    routes = [route_map[key] for key in sorted(route_map)]
+    runtime_findings: List[Dict[str, object]] = []
+    runtime_link_pages: List[Dict[str, object]] = []
+    gaps: List[Dict[str, object]] = list(sitemap_gaps)
+    if runtime_enabled:
+        for route in routes:
+            response = None if route.get("is_pattern") else fetch_http(
+                runtime_url(base_url, str(route.get("route") or "/"))
+            )
+            route_findings, gap = verify_runtime_route(
+                route,
+                base_url,
+                domain,
+                provided_result=response,
+            )
+            runtime_findings.extend(route_findings)
+            if gap:
+                gaps.append(gap)
+            if (
+                domain
+                and route.get("scored")
+                and route.get("coverage_status") == "verified"
+                and route.get("indexability") == "indexable"
+                and response is not None
+                and response.status_code == 200
+                and not response.error
+                and not response.truncated
+                and response.content_type
+                and "html" in response.content_type.lower()
+            ):
+                route_path = str(route.get("route") or "/")
+                public_url = domain.rstrip("/") + (route_path if route_path.startswith("/") else "/" + route_path)
+                runtime_link_pages.append(
+                    extract_page_link_evidence(
+                        parse_runtime_html(response.text),
+                        public_url,
+                        route_path,
+                        domain,
+                        index_intent=str(route.get("index_intent") or "unknown"),
+                        indexability=str(route.get("indexability") or "unknown"),
+                    )
+                )
+        site_blocked = robots_disallows_all(robots_result)
+        if site_blocked:
+            for route in routes:
+                if (
+                    route.get("scored")
+                    and route.get("index_intent") == "index"
+                    and route.get("coverage_status") == "verified"
+                ):
+                    route["indexability"] = "blocked"
+                    impact = "P0" if route.get("priority") == "core" else "P1"
+                    finding = runtime_finding(
+                        route,
+                        robots_result,
+                        "ROBOTS_SITE_BLOCK",
+                        impact,
+                        "robots.txt 的 User-agent: * 组使用 Disallow: / 阻止目标页抓取",
+                        "移除全站阻断，或将明确不应索引的页面从 index intent 与 sitemap 中移除。",
+                    )
+                    finding["provenance"] = response_provenance(robots_result, "runtime")
+                    runtime_findings.append(finding)
+        else:
+            existing_intent_conflicts = {
+                str(finding.get("route"))
+                for finding in runtime_findings
+                if finding.get("code") == "INDEX_INTENT_CONFLICT"
+            }
+            for route in routes:
+                route_path = str(route.get("route") or "")
+                if (
+                    route_path in existing_intent_conflicts
+                    or not route.get("scored")
+                    or route.get("index_intent") != "index"
+                    or route.get("coverage_status") != "verified"
+                    or not robots_blocks_route(robots_result, route_path)
+                ):
+                    continue
+                route["indexability"] = "blocked"
+                impact = "P0" if route.get("priority") == "core" else "P1"
+                finding = runtime_finding(
+                    route,
+                    robots_result,
+                    "INDEX_INTENT_CONFLICT",
+                    impact,
+                    f"robots.txt 的 User-agent: * 规则阻止抓取目标路由 {route_path}",
+                    "调整 robots Allow/Disallow 规则，或把该路由的显式 index intent 改为 noindex。",
+                )
+                finding["provenance"] = response_provenance(robots_result, "runtime")
+                runtime_findings.append(finding)
+    elif rendered_root:
+        for route in routes:
+            rendered_path = route.get("rendered_path")
+            if rendered_path:
+                path = rendered_root / str(rendered_path)
+                response = rendered_http_result(path, str(rendered_path), str(route.get("route")), domain)
+                route_findings, gap = verify_runtime_route(
+                    route,
+                    "",
+                    domain,
+                    provided_result=response,
+                    evidence_kind="current_rendered",
+                    provenance_mode="current_rendered",
+                )
+                runtime_findings.extend(route_findings)
+                if gap:
+                    gaps.append(gap)
+            elif route.get("scored"):
+                gaps.append(
+                    coverage_gap(
+                        str(route.get("route")),
+                        "current_rendered_missing",
+                        "A mapped HTML file in --rendered-root",
+                    )
+                )
+    else:
+        for route in routes:
+            if route.get("is_pattern"):
+                gaps.append(
+                    coverage_gap(
+                        str(route.get("route")),
+                        "dynamic_pattern_without_concrete_route",
+                        "A concrete URL from sitemap, routes-file, registry, or generateStaticParams",
+                    )
+                )
+            elif route.get("scored"):
+                gaps.append(
+                    coverage_gap(
+                        str(route.get("route")),
+                        "runtime_not_verified",
+                        "HTTP response from --base-url or a current-run rendered artifact",
+                    )
+                )
+
+    if args.reciprocal_links == "off":
+        link_analysis = empty_link_analysis("disabled")
+    elif not runtime_enabled:
+        link_analysis = empty_link_analysis("runtime_required")
+    elif not domain:
+        link_analysis = empty_link_analysis("domain_required")
+    else:
+        link_analysis, reciprocal_findings = analyze_reciprocal_links(
+            runtime_link_pages,
+            domain,
+            fetcher=reciprocal_fetcher or fetch_public_http,
+        )
+        runtime_findings.extend(reciprocal_findings)
+
+    debug_result: Dict[str, object] = {
+        "html_pages": html_pages,
+        "source_audit": source_audit,
+        "repo_audit": repo_audit,
+    }
+    legacy_issues = collect_issues(debug_result)
+    if sitemap_result and sitemap_result.status_code == 200 and not sitemap_result.error:
+        legacy_issues = [issue for issue in legacy_issues if issue.get("code") not in {"SITEMAP_MISSING", "SITEMAP_EMPTY"}]
+    if robots_result and robots_result.status_code == 200 and not robots_result.error:
+        legacy_issues = [issue for issue in legacy_issues if issue.get("code") != "ROBOTS_MISSING"]
+    if routes_file_error and args.routes_file:
+        legacy_issues.append(
+            asdict(
+                Issue(
+                    "P3",
+                    "ROUTES_FILE_UNREADABLE",
+                    str(Path(args.routes_file).resolve()),
+                    f"routes-file 无法解析：{routes_file_error}",
+                    "修复 JSON 或路由容器后重新扫描；当前路由覆盖未知。",
+                )
+            )
+        )
+    findings = dedupe_findings([finding_from_issue(issue) for issue in legacy_issues] + runtime_findings, root)
+    for page in html_pages:
+        page.pop("issues", None)
+    source_audit.pop("issues", None)
+    repo_audit.pop("issues", None)
+    if not routes:
+        gaps.append(
+            coverage_gap(
+                None,
+                "no_target_routes",
+                "A sitemap, routes-file, framework route inventory, or registered content",
+            )
+        )
+    existing_gap_keys = {(gap.get("route"), gap.get("reason"), gap.get("path_or_url")) for gap in gaps}
+    for finding in findings:
+        if finding.get("status") != "Unknown" or not finding.get("path_or_url"):
+            continue
+        finding_code = str(finding.get("code"))
+        mapped_route = finding.get("route")
+        verified_route = route_map.get(str(mapped_route)) if mapped_route else None
+        if verified_route and verified_route.get("coverage_status") == "verified" and verified_route.get("evidence_kind") in {
+            "http",
+            "current_rendered",
+        }:
+            continue
+        if finding_code in {
+            "ROBOTS_MISSING",
+            "SITEMAP_MISSING",
+            "NO_METADATA_SOURCE_FOUND",
+            "NO_CANONICAL_SOURCE_FOUND",
+            "NO_SCHEMA_SOURCE_FOUND",
+        }:
+            continue
+        if not mapped_route and finding_code in {
+            "SOURCE_READ_TRUNCATED",
+            "SOURCE_READ_FAILED",
+            "SOURCE_IMG_ALT_UNKNOWN",
+        }:
+            continue
+        reason = {
+            "ROUTES_FILE_UNREADABLE": "routes_file_unreadable",
+            "SOURCE_READ_TRUNCATED": "source_read_truncated",
+            "SOURCE_READ_FAILED": "source_read_failed",
+            "HTML_READ_TRUNCATED": "html_read_truncated",
+            "HTML_READ_FAILED": "html_read_failed",
+            "HTML_PARSE_FAILED": "html_parse_failed",
+            "SOURCE_IMG_ALT_UNKNOWN": "rendered_attribute_needed",
+        }.get(finding_code, "evidence_unknown")
+        needed = {
+            "routes_file_unreadable": "A readable JSON routes-file",
+            "source_read_truncated": "A complete readable source file",
+            "source_read_failed": "A readable source file",
+            "html_read_truncated": "A complete current-run HTML document",
+            "html_read_failed": "A readable current-run HTML document",
+            "html_parse_failed": "A parseable current-run HTML document",
+            "rendered_attribute_needed": "Rendered HTML for the mapped route",
+        }.get(reason, "Additional runtime or source evidence")
+        gap = coverage_gap(
+            finding.get("route"),
+            reason,
+            needed,
+            str(finding.get("path_or_url")),
+        )
+        key = (gap.get("route"), gap.get("reason"), gap.get("path_or_url"))
+        if key not in existing_gap_keys:
+            gaps.append(gap)
+            existing_gap_keys.add(key)
+
+    coverage = coverage_contract(routes, findings, gaps)
+    commit = source_commit(root)
+    mode = "runtime" if runtime_enabled else ("rendered" if args.rendered_root else "source-only")
     result: Dict[str, object] = {
-        "generated_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        "schema_version": 2,
+        "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
         "root": str(root),
         "domain": domain,
         "keywords": keywords,
@@ -1191,23 +3637,48 @@ def main(argv: Optional[List[str]] = None) -> int:
         "html_pages": html_pages,
         "source_audit": source_audit,
         "repo_audit": repo_audit,
+        "scope": {
+            "root": str(root),
+            "domain": domain,
+            "base_url": base_url,
+            "rendered_root": str(rendered_root) if rendered_root else None,
+            "reciprocal_links": args.reciprocal_links,
+            "framework": framework_slug(project),
+            "mode": mode,
+            "source_commit": commit,
+            "started_at": started_at,
+            "route_sources": coverage["by_source"],
+            "routes_file": str(Path(args.routes_file).resolve()) if args.routes_file else None,
+            "routes_file_error": routes_file_error,
+            "excludes": list(args.exclude),
+            "output_paths": [str(json_path), str(md_path)],
+            "scanned_paths": sorted(rel_posix(path, root) for path in all_files),
+            "unmapped_keywords": unmapped_keywords,
+            "adsense_assessments": assessment_scope,
+            "provenance": {"mode": mode, "source_commit": commit},
+        },
+        "coverage": coverage,
+        "routes": routes,
+        "findings": findings,
+        "link_analysis": link_analysis,
+        "adsense": build_adsense_contract(bool(args.adsense), routes, coverage, assessment_payload),
+        "summary": {
+            "confirmed_by_impact": coverage["confirmed_counts"],
+            "finding_statuses": dict(Counter(finding["status"] for finding in findings)),
+        },
     }
-    if args.adsense:
-        result["adsense_audit"] = audit_adsense_readiness(result, root, all_files)
-
-    out_prefix = Path(args.out)
-    if not out_prefix.is_absolute():
-        out_prefix = Path.cwd() / out_prefix
-    json_path = out_prefix.with_suffix(".json")
-    md_path = out_prefix.with_suffix(".md")
+    result = redact_report_value(result)
+    result["scope"]["provenance"]["result_hash"] = stable_result_hash(result)
     json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     write_markdown(result, md_path)
 
-    issues = collect_issues(result)
-    counts = Counter(issue.get("severity", "P3") for issue in issues)
     print(f"Wrote: {json_path}")
     print(f"Wrote: {md_path}")
-    print("Issues:", ", ".join(f"{sev}={counts.get(sev, 0)}" for sev in ["P0", "P1", "P2", "P3"]))
+    confirmed = result["summary"]["confirmed_by_impact"]
+    print("Confirmed:", ", ".join(f"{impact}={confirmed.get(impact, 0)}" for impact in ["P0", "P1", "P2", "P3"]))
+    print("Finding statuses:", json.dumps(result["summary"]["finding_statuses"], ensure_ascii=False, sort_keys=True))
+    if not result["coverage"]["complete"]:
+        print(f"Coverage incomplete: {len(result['coverage']['gaps'])} gap(s)")
     return 0
 
 
