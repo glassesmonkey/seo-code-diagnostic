@@ -114,7 +114,16 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
 - [`references/adsense-requirements.md`](references/adsense-requirements.md)：只取全部 73 个 ADS ID 及其证据要求；
 - [`references/adsense-review-diagnostic.md`](references/adsense-review-diagnostic.md)：游戏/工具站内容与政策判断。
 
-状态和 readiness 以 report contract 为准。每个 ADS ID 只能是 `Pass / Fail / Unknown / N/A`。页面数、文章数和内容判断只使用已验证 URL；未覆盖就是 `Unknown`。73 项未完整覆盖或关键外部证据未取得时，不输出 `Ready` 或 `Ready after fixes`。
+状态和 readiness 以 report contract 为准。每个 ADS ID 只能是 `Pass / Fail / Unknown / N/A`。页面数、文章数和内容判断只使用已验证 URL；未覆盖就是 `Unknown`。73 项未完整覆盖或关键外部证据未取得时，`readiness` 保持 `null`。
+
+需要合并人工、后台、授权、analytics 或法律证据时，按以下顺序执行：
+
+1. 用 `scripts/adsense_report_validator.py --template --target-domain URL` 生成 73 项模板；
+2. 只填写非敏感摘要、公开 URL、仓库相对路径和不透明 `evidence_ref`；
+3. 用 `--check-assessments` 校验后，将文件传给扫描器的 `--adsense-assessments`；
+4. 用 `--check-report` 复核最终 JSON 的计数、结论、readiness 和修复顺序。
+
+`--adsense-assessments` 必须与 `--adsense --domain` 同时使用。扫描器排除该输入，只在 scope 记录模式和 SHA-256。校验器只能证明结构与聚合自洽，不能证明证据内容真实。
 
 连续运行两次，比较 `scope.provenance.result_hash`，确认第二次不扫描第一次报告且结果稳定；验证报告没有密钥或原始用户数据。若执行了代码修改，再运行项目 lint/build/test 并只声明实际验证结果。
 

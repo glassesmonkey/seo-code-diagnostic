@@ -1,6 +1,6 @@
 # AdSense Requirements Checklist
 
-Last checked against Google documentation: 2026-06-25.
+Last checked against Google documentation: 2026-07-17.
 
 Use this file for AdSense application readiness, rejection diagnosis, and post-fix verification. It is an operational checklist, not a guarantee of approval. If current Google documentation conflicts with this file, current Google documentation wins.
 
@@ -155,14 +155,14 @@ Use this file for AdSense application readiness, rejection diagnosis, and post-f
 
 Every AdSense audit must include:
 
-1. `Decision` only when all 73 IDs are reported, route coverage is complete, and no required external evidence remains `Unknown`. Otherwise `conclusion` stays `null`; do not emit `Ready` or `Ready after fixes`.
-2. `Blockers`, `High Risks`, and `Medium Risks`, ordered by severity.
+1. `Decision` only when all 73 IDs are reported, route coverage is complete, and no required external evidence remains `Unknown`. Otherwise `conclusion` and `readiness` stay `null`.
+2. `Blockers`, `High Risks`, and `Medium Risks`, ordered by severity, repair effort, then ADS ID.
 3. For each finding: `ADS ID`, issue, evidence, official/source basis, exact fix, and acceptance criteria.
 4. `Exhaustive ADS Checklist` with every ID exactly once:
 
-| ID | Severity | Status | Evidence | Next action |
-| --- | --- | --- | --- | --- |
-| ADS-ELIG-01 | Blocker | Pass/Fail/Unknown/N/A | ... | ... |
+| ID | Severity | Status | Effort | Evidence | Next action |
+| --- | --- | --- | --- | --- | --- |
+| ADS-ELIG-01 | Blocker | Pass/Fail/Unknown/N/A | S/M/L/Unknown/N/A | ... | ... |
 
 5. `Completeness Check`:
    - Requirement IDs in this reference: 73

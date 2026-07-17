@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-站外互链运行时验证已完成；下一阶段接入 AdSense assessments 完整性校验。
+AdSense evidence validator、readiness 聚合和安装副本同步已完成；当前无未完成阶段。
 
 ## 已完成
 
@@ -19,6 +19,10 @@
 - Exact-Statement fresh runtime 验收：27/27 sitemap URL 返回 200 并进入 coverage，4 篇文章计数正确，确认 1 个 P0 index/noindex 冲突和 1 个 P1 soft 404。
 - 已将验证后的源码机械同步到 `~/.codex/skills/seo-code-diagnostic`；逐文件 diff 为空，安装副本 42/42 测试通过。
 - 完成受控站外互链验证：限制公开 HTTP(S) 目标、逐跳校验重定向、隔离第三方 coverage gap，并只对至少 3 个双方 follow 主机组成的模板/伙伴页模式生成 P2。
+- 增加独立 AdSense 校验器：动态读取 73 个 ADS ID，生成完整模板，并校验状态、直接证据、provenance、Unknown 下一步、N/A 理由、目标域名和敏感信息边界。
+- 扫描器支持 `--adsense-assessments`，自动排除输入文件，只记录 SHA-256，并从明细重算 `complete`、兼容 `conclusion`、四态 `readiness` 和按 severity/effort 排序的修复顺序。
+- 完成 Google 官方 AdSense 文档 2026-07-17 刷新核对；没有发现需要调整现有 73 项 registry 的明确变化，也未引入非官方冷却期或主观评分。
+- 更新报告契约、Skill 和 README，固定 template → assessment 校验 → 扫描合并 → 最终报告校验流程，并声明校验器不证明证据陈述真实。
 
 ## 进行中
 
@@ -26,7 +30,7 @@
 
 ## 待办
 
-- 增加 73 项 AdSense assessments 校验器、readiness 聚合和修复成本排序。
+- 无。
 
 ## 阻塞
 
@@ -34,13 +38,11 @@
 
 ## 最近验证
 
-1. 2026-07-17：互链 Phase 3 的 54/54 单元测试、`py_compile` 与 `git diff --check` 通过。
-2. 2026-07-13：Exact-Statement 基准与路由真相采用只读检查获得，项目 Git 状态保持 clean。
-3. 2026-07-13：阶段 1 的 17/17 测试、`py_compile` 与 `git diff --check` 通过。
-4. 2026-07-13：阶段 1 fixture 端到端扫描为 `Confirmed P0-P3=0`，无 URL 证据的 AdSense 73 项保持 Unknown。
-5. 2026-07-13：Exact-Statement source-only 扫描不读取 `.next/.open-next/.source/reports/output/.env*`，`Confirmed P0-P2=0`。
-6. 2026-07-13：Exact source-only 连续两次规范化结果哈希一致，第二次没有扫描第一次报告。
+1. 2026-07-17：源码 67/67 单元测试、两个脚本的 `py_compile`、validator selftest 与 `git diff --check` 通过。
+2. 2026-07-17：Exact-Statement fresh build 成功；source-only 与 fresh runtime 扫描完成，runtime 为 187 个目标、81 个已验证、7 个动态路由 gap，AdSense 最终报告校验通过。
+3. 2026-07-17：Exact runtime 连续两次 `result_hash` 均为 `6b237340e4d1e9a581dc2877279bf925dcaa1f3b2dc35600ef5d726f14d9ba74`；样本 Git 状态保持 clean。
+4. 2026-07-17：安装副本与源码逐文件 diff 为空，安装副本 67/67 测试通过。
+5. 2026-07-17：互链 Phase 3 的 54/54 单元测试、`py_compile` 与 `git diff --check` 通过。
+6. 2026-07-13：Exact-Statement source-only 扫描不读取 `.next/.open-next/.source/reports/output/.env*`，`Confirmed P0-P2=0`。
 7. 2026-07-13：隔离且不含 `.env*/.dev.vars` 的 Exact 验收 clone 在 commit `b23660f` fresh build 成功；原项目与 clone Git 状态 clean。
-8. 2026-07-13：最终 `python3 -m unittest discover -s tests -v` 为 42/42 通过，`py_compile` 与 `git diff --check` 通过。
-9. 2026-07-13：Exact fresh runtime 的 27/27 sitemap URL 均为 200；连续两次 `result_hash` 均为 `1a411abb8d2197495c74e38ec56e236333a32a1d246bf8014de1cc2d6d8be87d`，原项目与验收 clone 保持 clean。
-10. 2026-07-13：安装副本与源码逐文件 diff 为空；安装副本 42/42 测试、`py_compile` 和 CLI help 验证通过。
+8. 2026-07-13：Exact fresh runtime 的 27/27 sitemap URL 均为 200；连续两次 `result_hash` 均为 `1a411abb8d2197495c74e38ec56e236333a32a1d246bf8014de1cc2d6d8be87d`，原项目与验收 clone 保持 clean。

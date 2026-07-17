@@ -42,6 +42,16 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from adsense_report_validator import (  # noqa: E402
+    load_registry as load_adsense_registry,
+    summarize_items as summarize_adsense_items,
+    validate_assessments,
+)
+
 EXCLUDED_DIR_NAMES = {
     ".git",
     ".hg",
@@ -1029,34 +1039,10 @@ def add_issue(issues: List[Issue], severity: str, code: str, file: str, evidence
 
 
 def adsense_requirements() -> List[Dict[str, str]]:
-    reference_path = Path(__file__).resolve().parents[1] / "references" / "adsense-requirements.md"
     try:
-        text = reference_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+        return load_adsense_registry()
+    except (OSError, UnicodeError, ValueError):
         return []
-    formal_start = text.find("## A.")
-    formal_end = text.find("## Required Audit Output")
-    if formal_start < 0 or formal_end <= formal_start:
-        return []
-    requirements: List[Dict[str, str]] = []
-    seen: set = set()
-    for line in text[formal_start:formal_end].splitlines():
-        match = re.match(
-            r"^\|\s*(ADS-[A-Z]+-[0-9]{2})\s*\|\s*(Blocker|High|Medium)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*$",
-            line,
-        )
-        if not match or match.group(1) in seen:
-            continue
-        seen.add(match.group(1))
-        requirements.append(
-            {
-                "id": match.group(1),
-                "severity": match.group(2),
-                "requirement": normalize_ws(match.group(3)),
-                "how_to_verify": normalize_ws(match.group(4)),
-            }
-        )
-    return requirements
 
 
 def adsense_requirement_ids() -> List[str]:
@@ -1067,6 +1053,7 @@ def build_adsense_contract(
     enabled: bool,
     routes: List[Dict[str, object]],
     coverage: Dict[str, object],
+    assessments: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     requirements = adsense_requirements()
     requirement_ids = [item["id"] for item in requirements]
@@ -1085,20 +1072,32 @@ def build_adsense_contract(
             "complete": False,
             "conclusion": None,
             "summary": empty_counts,
+            "readiness": None,
+            "remediation_order": [],
         }
 
-    items = [
-        {
-            **requirement,
-            "status": "Unknown",
-            "evidence": "当前审计没有足以确认该要求的直接证据。",
-            "next_action": requirement["how_to_verify"],
-            "evidence_kind": "coverage_gap",
-            "path_or_url": None,
-            "provenance": {"mode": "coverage-gap"},
-        }
-        for requirement in requirements
-    ]
+    assessment_by_id = {
+        str(item.get("id")): item
+        for item in (assessments or {}).get("items", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    items = []
+    for requirement in requirements:
+        assessment = assessment_by_id.get(requirement["id"])
+        if assessment is None:
+            assessment = {
+                "id": requirement["id"],
+                "status": "Unknown",
+                "evidence": "当前审计没有足以确认该要求的直接证据。",
+                "next_action": requirement["how_to_verify"],
+                "evidence_kind": "coverage_gap",
+                "path_or_url": None,
+                "evidence_ref": None,
+                "provenance": {"mode": "coverage-gap"},
+                "effort": "Unknown",
+                "applicability_reason": None,
+            }
+        items.append({**assessment, **requirement})
     verified_article_routes = [
         str(route.get("route"))
         for route in routes
@@ -1110,30 +1109,18 @@ def build_adsense_contract(
         and route.get("coverage_status") == "verified"
         and route.get("evidence_kind") in {"http", "current_rendered"}
     ]
-    counts = Counter(item["status"] for item in items)
     reported_ids = {str(item.get("id")) for item in items}
     missing_ids = [ads_id for ads_id in requirement_ids if ads_id not in reported_ids]
-    status_counts = {status: counts.get(status, 0) for status in ["Pass", "Fail", "Unknown", "N/A"]}
-    complete = bool(
-        requirements
-        and coverage.get("complete") is True
-        and len(items) == len(requirements)
-        and not missing_ids
-        and all(item["status"] in {"Pass", "Fail", "N/A"} for item in items)
-    )
+    aggregation = summarize_adsense_items(items, coverage.get("complete") is True)
     return {
         "enabled": True,
-        "status": "Unknown" if not complete else ("Fail" if counts.get("Fail") else "Pass"),
         "requirement_total": len(requirements),
         "reported_total": len(items),
         "missing_ids": missing_ids,
-        "status_counts": status_counts,
         "items": items,
         "article_count": len(verified_article_routes),
         "article_routes": sorted(verified_article_routes),
-        "complete": complete,
-        "conclusion": None if not complete else ("Fail" if counts.get("Fail") else "Pass"),
-        "summary": status_counts,
+        **aggregation,
     }
 
 
@@ -3157,20 +3144,25 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
             [
                 "## AdSense",
                 f"- 状态：{escape_md(adsense.get('status'))}",
+                f"- Readiness：{escape_md(adsense.get('readiness') or 'undetermined')}",
                 f"- 已验证文章路由：{int(adsense.get('article_count', 0) or 0)}",
                 f"- 检查项：{int(adsense.get('reported_total', 0) or 0)}/{int(adsense.get('requirement_total', 0) or 0)}",
                 f"- 证据完整：{'是' if adsense.get('complete') else '否'}",
                 "",
-                "| ADS ID | Severity | Status | Evidence | Next action |",
-                "|---|---|---|---|---|",
+                "| ADS ID | Severity | Status | Effort | Evidence | Next action |",
+                "|---|---|---|---|---|---|",
             ]
         )
         for item in adsense.get("items", []):
             lines.append(
                 f"| {escape_md(item.get('id'))} | {escape_md(item.get('severity'))} | "
-                f"{escape_md(item.get('status'))} | {escape_md(item.get('evidence'))} | "
+                f"{escape_md(item.get('status'))} | {escape_md(item.get('effort'))} | "
+                f"{escape_md(item.get('evidence'))} | "
                 f"{escape_md(item.get('next_action'))} |"
             )
+        remediation_order = list(adsense.get("remediation_order", []))
+        if remediation_order:
+            lines.extend(["", "修复顺序：" + " → ".join(escape_md(item) for item in remediation_order)])
         lines.append("")
 
     output_path.write_text("\n".join(lines), encoding="utf-8")
@@ -3178,6 +3170,19 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
 
 def stable_result_hash(result: Dict[str, object]) -> str:
     comparable = json.loads(json.dumps(result, ensure_ascii=False))
+
+    def remove_volatile_runtime_digests(value: object) -> None:
+        if isinstance(value, list):
+            for item in value:
+                remove_volatile_runtime_digests(item)
+            return
+        if not isinstance(value, dict):
+            return
+        if value.get("mode") in {"runtime", "current_rendered"}:
+            value.pop("content_hash", None)
+        for item in value.values():
+            remove_volatile_runtime_digests(item)
+
     comparable.pop("generated_at", None)
     scope = comparable.get("scope")
     if isinstance(scope, dict):
@@ -3186,6 +3191,7 @@ def stable_result_hash(result: Dict[str, object]) -> str:
         provenance = scope.get("provenance")
         if isinstance(provenance, dict):
             provenance.pop("result_hash", None)
+    remove_volatile_runtime_digests(comparable)
     encoded = json.dumps(comparable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -3203,6 +3209,11 @@ def main(
     parser.add_argument("--domain", default="", help="Canonical production domain, e.g. https://example.com")
     parser.add_argument("--keywords", default="", help="Comma-separated target keywords for density checks.")
     parser.add_argument("--adsense", action="store_true", help="Add AdSense approval-readiness checks for game/tool/content sites.")
+    parser.add_argument(
+        "--adsense-assessments",
+        default="",
+        help="Validated 73-item AdSense assessment JSON; requires --adsense and --domain.",
+    )
     parser.add_argument("--out", default="seo-audit", help="Output prefix, without extension.")
     parser.add_argument("--base-url", default="", help="Local or remote HTTP origin reserved for URL-level verification.")
     parser.add_argument("--routes-file", default="", help="JSON route intent mapping.")
@@ -3235,6 +3246,27 @@ def main(
     domain = normalize_domain(args.domain)
     keywords = [normalize_ws(x) for x in args.keywords.split(",") if normalize_ws(x)]
 
+    assessment_path: Optional[Path] = None
+    assessment_payload: Optional[Dict[str, object]] = None
+    assessment_scope: Dict[str, object] = {"mode": "not_provided", "sha256": None}
+    if args.adsense_assessments:
+        if not args.adsense or not domain:
+            parser.error("--adsense-assessments requires both --adsense and --domain")
+        assessment_path = Path(args.adsense_assessments).resolve()
+        try:
+            assessment_bytes = assessment_path.read_bytes()
+            loaded_assessments = json.loads(assessment_bytes.decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            parser.error(f"unable to read --adsense-assessments: {type(exc).__name__}")
+        assessment_errors = validate_assessments(loaded_assessments, expected_domain=domain)
+        if assessment_errors:
+            parser.error("invalid --adsense-assessments:\n- " + "\n- ".join(assessment_errors))
+        assessment_payload = loaded_assessments
+        assessment_scope = {
+            "mode": "provided",
+            "sha256": hashlib.sha256(assessment_bytes).hexdigest(),
+        }
+
     out_prefix = Path(args.out)
     if not out_prefix.is_absolute():
         if args.out == "seo-audit":
@@ -3249,7 +3281,10 @@ def main(
     base_url = args.base_url.rstrip("/")
     runtime_enabled = bool(base_url)
     rendered_root = Path(args.rendered_root).resolve() if args.rendered_root else None
-    inventory_files = [p for p in iter_files(root, args.exclude, [json_path, md_path])]
+    excluded_input_paths = [json_path, md_path]
+    if assessment_path is not None:
+        excluded_input_paths.append(assessment_path)
+    inventory_files = [p for p in iter_files(root, args.exclude, excluded_input_paths)]
     fumadocs_candidates = discover_fumadocs_registry(root, inventory_files)
     locale_message_candidates = discover_locale_message_registry(root, inventory_files)
     registered_content_paths = {
@@ -3619,13 +3654,14 @@ def main(
             "output_paths": [str(json_path), str(md_path)],
             "scanned_paths": sorted(rel_posix(path, root) for path in all_files),
             "unmapped_keywords": unmapped_keywords,
+            "adsense_assessments": assessment_scope,
             "provenance": {"mode": mode, "source_commit": commit},
         },
         "coverage": coverage,
         "routes": routes,
         "findings": findings,
         "link_analysis": link_analysis,
-        "adsense": build_adsense_contract(bool(args.adsense), routes, coverage),
+        "adsense": build_adsense_contract(bool(args.adsense), routes, coverage, assessment_payload),
         "summary": {
             "confirmed_by_impact": coverage["confirmed_counts"],
             "finding_statuses": dict(Counter(finding["status"] for finding in findings)),

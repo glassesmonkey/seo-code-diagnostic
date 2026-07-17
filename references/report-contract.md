@@ -13,6 +13,7 @@
 - `--rendered-root PATH`：只接收本轮生成的静态 HTML 目录；
 - `--exclude GLOB`：可重复，追加到硬排除列表；
 - `--reciprocal-links auto|off`：默认 `auto`；同时存在 `--base-url` 和 `--domain` 时受控访问站外目标页与其首页，`off` 明确禁止第三方请求。
+- `--adsense-assessments PATH`：只与 `--adsense --domain` 同用；加载通过独立校验的 73 项人工/外部证据。
 
 `--keywords` 只生成未映射词清单，不应用到所有页面。推荐 routes file：
 
@@ -57,6 +58,7 @@
 - `source_commit`、`started_at`；
 - `route_sources`、`excludes`、`output_paths`；
 - `unmapped_keywords`；
+- `adsense_assessments: {mode, sha256}`：只记录 `provided | not_provided` 和输入字节 SHA-256，不记录输入路径或原始证据；
 - `provenance`：对象，至少含 `mode`；按模式记录本轮 build/serve、commit、开始时间或静态目录来源；`result_hash` 是排除时间字段后的稳定结果哈希，用于复跑比较。
 
 不得把 secret 值、原始上传路径内的用户内容或环境变量片段放进 scope。
@@ -152,7 +154,7 @@
 - `Unknown`：读取失败、截断、无法解析、路由/意图无法映射或当前没有页面覆盖。
 - 同一问题按 `route + code + content_hash` 去重，不能因 `.next`、standalone、OpenNext 或重复文件复制计数。
 - Next.js 既有构建目录永远不能成为 evidence；静态 `--rendered-root` 必须有 current-run provenance。
-- 连续运行比较 `scope.provenance.result_hash`；`generated_at` 和 `started_at` 不参与稳定哈希。
+- 连续运行比较 `scope.provenance.result_hash`；时间、输出路径和可能含构建 nonce 的 runtime/current-rendered 原始正文哈希不参与，已提取语义字段、assessment 内容及其 SHA-256 仍参与。
 - 互链 `Confirmed` 只确认当前双方 HTTP 页面呈现的可观察链接模式，不确认站点所有权、付费关系、主题相关性或操纵排名意图。
 
 ## AdSense 对象
@@ -160,6 +162,7 @@
 ```json
 {
   "enabled": false,
+  "status": "N/A",
   "requirement_total": 73,
   "reported_total": 0,
   "missing_ids": [],
@@ -167,14 +170,48 @@
   "items": [],
   "article_count": 0,
   "complete": false,
-  "conclusion": null
+  "conclusion": null,
+  "readiness": null,
+  "remediation_order": []
 }
 ```
 
 - 每个 ADS ID 只能为 `Pass / Fail / Unknown / N/A`，不存在 `warn`。
-- `Pass` 需要该 ID 所要求的直接证据；没有覆盖就是 `Unknown`。
+- 每项包含 `evidence`、`evidence_kind`、`path_or_url`、`evidence_ref`、`provenance`、`next_action`、`effort` 和 `applicability_reason`。`effort` 只使用 `S / M / L / Unknown / N/A`。
+- `Pass/Fail` 需要非占位直接证据、有效 provenance，以及相应公开 URL、仓库相对路径或不透明 evidence ref；`coverage_gap` 不能冒充证据。
+- `Unknown` 必须说明缺口和下一步；`N/A` 必须说明不适用理由。没有覆盖就是 `Unknown`。
 - 页面数、文章数、必备页和内容质量只按已验证 URL 统计，源码文件数不能冒充页面数。
-- 73 个 ID 未全部报告、存在 coverage gap，或关键后台/授权/政策证据为 Unknown 时，`complete` 为 false、`conclusion` 保持 `null`，不得输出 `Ready` 或 `Ready after fixes`。
+- 73 个 ID 未全部报告、存在 coverage gap，或任一项为 `Unknown` 时，`complete` 为 false，`conclusion` 与 `readiness` 均为 `null`。
+- coverage 完整且不存在 `Unknown` 时：存在 Blocker `Fail` 为 `NOT_READY`；仅有 High/Medium `Fail` 为 `READY_AFTER_FIXES`；全部 `Pass/N/A` 为 `READY`。
+- `conclusion` 是兼容字段：完整且有 `Fail` 为 `Fail`，完整且无 `Fail` 为 `Pass`，否则为 `null`。
+- `remediation_order` 只列 `Fail`，按 `Blocker > High > Medium`、同级 `S > M > L`、最后 ADS ID 排序。
+
+### Assessment 输入
+
+```json
+{
+  "schema_version": 1,
+  "target_domain": "https://example.com",
+  "items": [
+    {
+      "id": "ADS-ELIG-01",
+      "status": "Unknown",
+      "evidence": "当前没有账户持有人年龄证据。",
+      "evidence_kind": "coverage_gap",
+      "path_or_url": null,
+      "evidence_ref": null,
+      "provenance": {"mode": "coverage-gap"},
+      "next_action": "由账户持有人确认资格并提供不透明证据编号。",
+      "effort": "Unknown",
+      "applicability_reason": null
+    }
+  ]
+}
+```
+
+实际输入必须包含全部 73 项且每个 ID 恰好一次。目标域名必须与最终报告 `scope.domain` 一致。assessment 文件自动从源码扫描中排除；授权原件、后台截图、个人信息、密钥和本地绝对路径不得进入输入或报告。
+
+使用 `scripts/adsense_report_validator.py --check-assessments` 校验输入，再用 `--check-report` 重算最终报告的计数、`complete`、`conclusion`、`readiness` 和 `remediation_order`。校验器保证结构与派生结果自洽，不证明证据陈述真实。
 
 ## Markdown 汇报顺序
 

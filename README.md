@@ -45,6 +45,7 @@ Cover every ADS-* requirement ID with Pass/Fail/Unknown/N/A, evidence, next acti
 
 - `SKILL.md`：Codex 主要工作流和诊断规则。
 - `scripts/seo_code_audit.py`：源码与 URL/渲染证据扫描器，输出 schema v2 JSON/Markdown。
+- `scripts/adsense_report_validator.py`：73 项 assessment 模板、完整性校验和报告聚合复核器。
 - `references/ahrefs-learning-notes.md`：Ahrefs 官方教程的诊断化学习笔记。
 - `references/adsense-requirements.md`：AdSense 官方来源驱动的 73 个 ADS ID 和证据要求。
 - `references/adsense-review-diagnostic.md`：AdSense 审核、low value content 和游戏/工具站薄壳风险诊断。
@@ -107,6 +108,34 @@ python scripts/seo_code_audit.py \
   --out ../seo-audit
 ```
 
+需要合并后台、授权、人工检查或其他外部证据时，先生成完整模板：
+
+```bash
+python scripts/adsense_report_validator.py \
+  --template \
+  --target-domain "https://example.com" > ../adsense-assessments.json
+```
+
+只在模板中保存非敏感摘要、公开 URL、仓库相对路径和不透明 `evidence_ref`，不要写入授权原件、后台截图、密钥、个人信息或本地绝对路径。填写后先校验，再合并并复核最终报告：
+
+```bash
+python scripts/adsense_report_validator.py \
+  --check-assessments ../adsense-assessments.json \
+  --target-domain "https://example.com"
+
+python scripts/seo_code_audit.py \
+  --root . \
+  --domain "https://example.com" \
+  --base-url "http://127.0.0.1:3000" \
+  --adsense \
+  --adsense-assessments ../adsense-assessments.json \
+  --out ../seo-audit
+
+python scripts/adsense_report_validator.py --check-report ../seo-audit.json
+```
+
+扫描器自动排除 assessment 输入文件，报告只保留输入模式和 SHA-256。校验器证明 73 项结构、状态和派生结论自洽，不证明证据陈述真实。
+
 脚本会生成：
 
 - `seo-audit.json`
@@ -118,7 +147,7 @@ python scripts/seo_code_audit.py \
 - `Candidate`：源码启发式或仍需映射/解释的线索；
 - `Unknown`：覆盖、读取或解析证据不足。
 
-P0–P2 汇总只统计 `Confirmed`。coverage 不完整时不能得出“未发现问题”。第三方请求失败只进入 `link_analysis.gaps`，不会污染主站 coverage。AdSense 页面数、文章数和内容状态只按已验证 URL 计算；完整审核必须覆盖 73 个 ADS ID，且状态只能是 `Pass / Fail / Unknown / N/A`。
+P0–P2 汇总只统计 `Confirmed`。coverage 不完整时不能得出“未发现问题”。第三方请求失败只进入 `link_analysis.gaps`，不会污染主站 coverage。AdSense 页面数、文章数和内容状态只按已验证 URL 计算；完整审核必须覆盖 73 个 ADS ID，且状态只能是 `Pass / Fail / Unknown / N/A`。`readiness` 只有在 coverage 完整且不存在 `Unknown` 时才为 `READY`、`READY_AFTER_FIXES` 或 `NOT_READY`，否则为 `null`。
 
 复跑稳定性使用 `scope.provenance.result_hash` 比较；生成时间不参与该哈希。
 
@@ -126,6 +155,7 @@ P0–P2 汇总只统计 `Confirmed`。coverage 不完整时不能得出“未发
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m py_compile scripts/seo_code_audit.py
+python3 -m py_compile scripts/seo_code_audit.py scripts/adsense_report_validator.py
+python3 scripts/adsense_report_validator.py --selftest
 git diff --check
 ```
