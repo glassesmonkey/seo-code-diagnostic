@@ -11,7 +11,8 @@
 - `--base-url URL`：对本轮本地服务或用户指定站点取 HTTP 证据；
 - `--routes-file PATH`：显式页面意图和关键词映射；
 - `--rendered-root PATH`：只接收本轮生成的静态 HTML 目录；
-- `--exclude GLOB`：可重复，追加到硬排除列表。
+- `--exclude GLOB`：可重复，追加到硬排除列表；
+- `--reciprocal-links auto|off`：默认 `auto`；同时存在 `--base-url` 和 `--domain` 时受控访问站外目标页与其首页，`off` 明确禁止第三方请求。
 
 `--keywords` 只生成未映射词清单，不应用到所有页面。推荐 routes file：
 
@@ -39,17 +40,19 @@
   "coverage": {},
   "routes": [],
   "findings": [],
+  "link_analysis": {},
   "adsense": {}
 }
 ```
 
-这五个对象/数组始终存在；未启用 AdSense 时也保留 `adsense.enabled: false`。
+这六个对象/数组始终存在；未运行互链验证时保留 `link_analysis.status: not_run`，未启用 AdSense 时保留 `adsense.enabled: false`。
 
 ### `scope`
 
 至少包含：
 
 - `root`、`domain`、`base_url`、`rendered_root`；
+- `reciprocal_links: auto | off`；
 - `framework`、`mode: source-only | runtime | rendered`；
 - `source_commit`、`started_at`；
 - `route_sources`、`excludes`、`output_paths`；
@@ -97,6 +100,30 @@
 
 建议 `route_kind` 使用 `public | metadata | api | auth | admin | error | redirect | unregistered | unknown`。`indexability` 使用 `indexable | noindex | blocked | redirect | error | unknown`。
 
+### `link_analysis`
+
+固定包含：
+
+```json
+{
+  "status": "not_run",
+  "reason": "runtime_required",
+  "candidate_domain_total": 0,
+  "selected_domain_total": 0,
+  "skipped_domain_total": 0,
+  "verified_page_total": 0,
+  "reciprocal_domain_total": 0,
+  "targets": [],
+  "gaps": []
+}
+```
+
+- `status` 只使用 `not_run | complete | partial`。source-only、rendered、显式 `off` 或缺少 `--domain` 时为 `not_run` 并记录原因。
+- `targets[]` 按最终站外主机去重，记录有限的正向链接样本、实际检查 URL、`reverse_status`、有限的反向链接样本和客观风险信号；不得保存完整第三方页面正文。
+- `reverse_status` 使用 `reverse_link_observed | not_observed_on_checked_pages | unknown`。“未观察到”只描述已检查的目标页和首页，不能代表整个域名没有回链。
+- `gaps[]` 记录请求失败、非 HTML、截断、安全拒绝和预算跳过。互链 gap 只影响 `link_analysis.status`，不得改变主站 `coverage.complete`。
+- 普通互链只进入 `targets[]`。只有满足 rubric 组合条件时才生成 `RECIPROCAL_LINK_NETWORK_PATTERN` finding；跨路由 finding 使用 `route: null` 并增加 `affected_routes`、`affected_hosts`。
+
 ### `findings[]`
 
 每条 finding 必须包含：
@@ -126,6 +153,7 @@
 - 同一问题按 `route + code + content_hash` 去重，不能因 `.next`、standalone、OpenNext 或重复文件复制计数。
 - Next.js 既有构建目录永远不能成为 evidence；静态 `--rendered-root` 必须有 current-run provenance。
 - 连续运行比较 `scope.provenance.result_hash`；`generated_at` 和 `started_at` 不参与稳定哈希。
+- 互链 `Confirmed` 只确认当前双方 HTTP 页面呈现的可观察链接模式，不确认站点所有权、付费关系、主题相关性或操纵排名意图。
 
 ## AdSense 对象
 
@@ -151,10 +179,11 @@
 ## Markdown 汇报顺序
 
 1. scope 与 coverage；
-2. Confirmed P0–P2；
-3. Candidate 与 Unknown；
-4. 路由/关键词覆盖；
-5. 条件 AdSense completeness；
-6. 最小修复与验证方法。
+2. 互链验证覆盖与证据；
+3. Confirmed P0–P2；
+4. Candidate 与 Unknown；
+5. 路由/关键词覆盖；
+6. 条件 AdSense completeness；
+7. 最小修复与验证方法。
 
 coverage 不完整时，结论必须写明“未完成目标路由验证”，禁止写“未发现 SEO 问题”。

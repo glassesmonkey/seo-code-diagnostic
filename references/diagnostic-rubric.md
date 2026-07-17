@@ -46,6 +46,7 @@
 | `INTENT_CONTENT_GAP` | 页面未回答其目标任务中的关键问题，证据来自页面类型和已映射关键词 | 禁止用固定字数阈值或关键词密度判断 |
 | `INTERNAL_LINK_GAP` | 重要上下级/相关页面之间缺少可验证的上下文入口 | 尚未覆盖全部相关页时为 `Candidate/Unknown` |
 | `STRUCTURED_DATA_INVALID` | 已输出的 JSON-LD 无效、与可见事实冲突或包含虚构评分/实体 | 单纯没有可选 schema 通常 P3 |
+| `RECIPROCAL_LINK_NETWORK_PATTERN` | 本轮运行时 HTML 确认至少 3 个不同站外主机与本站存在双方未限定的 follow 链接，且这些链接形成全站模板重复或集中伙伴页模式 | 单个/少量普通互链、任一方向使用 `nofollow/sponsored/ugc`、只检查有限页面但未观察到回链，均不成立；Confirmed 只证明模式，不证明操纵排名的主观意图 |
 
 ## P3：增强项
 
@@ -78,12 +79,15 @@ P3 用于不阻断索引、也没有证据表明显著损害意图满足的改�
 - 不得用固定字符数把页面判为薄内容；先判断页面类型、用户任务和信息增益。
 - 缺 description、缺 canonical、多个 H1 都不是无条件 P1。
 - `"use client"` 不是 CSR-only 的证明；必须检查当前 HTTP/渲染 HTML。
+- 站外链接数量或一次普通互链不能单独证明链接垃圾；必须取得双方页面证据并满足 `RECIPROCAL_LINK_NETWORK_PATTERN` 的组合条件。
 
 解释依据：
 
 - [Google Search Central: January 2023 SEO office hours](https://developers.google.com/search/help/office-hours/2023/january?hl=en)
 - [Google Search Central: title links](https://developers.google.com/search/docs/appearance/title-link)
 - [Google Search Central: canonical consolidation](https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls)
+- [Google Search Central: spam policies - link spam](https://developers.google.com/search/docs/essentials/spam-policies#link-spam)
+- [Google Search Central: qualify outbound links](https://developers.google.com/search/docs/crawling-indexing/qualify-outbound-links)
 
 ## AdSense 与 P0–P3 的边界
 

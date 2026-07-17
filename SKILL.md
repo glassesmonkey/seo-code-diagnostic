@@ -21,7 +21,7 @@ description: "Run URL-first, evidence-gated SEO audits of website codebases and 
 
 | 条件 | 模式 | 结论上限 |
 |---|---|---|
-| 有本轮服务 | `--base-url` | HTTP 证据可进入 `Confirmed` |
+| 有本轮服务 | `--base-url` | HTTP 证据可进入 `Confirmed`；同时有 `--domain` 时默认受控验证站外互链 |
 | 有本轮静态输出 | `--rendered-root` | 当前 HTML 可进入 `Confirmed` |
 | 无法构建/启动 | source-only | 源码启发式最多 `Candidate` |
 | 用户明确要求 AdSense | 以上模式 + `--adsense` | 仍受 73 ID completeness 约束 |
@@ -35,6 +35,7 @@ description: "Run URL-first, evidence-gated SEO audits of website codebases and 
 - `root`、commit、框架、目标域名和审计时间；
 - 可否执行本轮 build/start；
 - 证据模式：`--base-url`、`--rendered-root` 或 source-only；
+- 互链验证模式：运行时默认 `--reciprocal-links auto`，需要禁止第三方请求时显式使用 `off`；
 - 页面级 `index_intent`、`priority`、`keywords` 和来源；需要显式映射时使用 `--routes-file`；
 - 用户给出的 `--keywords` 只作为未映射词清单，禁止套用到每个页面。
 
@@ -85,7 +86,7 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
   --out "../seo-audit"
 ```
 
-对目标 URL 检查 HTTP 状态、redirect、robots、title、description、H1、canonical、正文、内链和 JSON-LD。本地动态集合增加不存在 slug 的 soft-404 sentinel。source-only 仍可运行，但所有源码启发式最多为 `Candidate`。
+对目标 URL 检查 HTTP 状态、redirect、robots、title、description、H1、canonical、正文、内链和 JSON-LD。本地动态集合增加不存在 slug 的 soft-404 sentinel。运行时同时有 `--domain` 时，从已验证公开 HTML 提取未限定站外链接，受控检查目标页和对方首页是否出现回链；source-only 和 rendered 模式不访问第三方。source-only 仍可运行，但所有源码启发式最多为 `Candidate`。
 
 **完成标准：** 每个目标 URL 有本轮 HTTP/静态证据，或在 `coverage.gaps` 中说明失败原因；构建 provenance 可追溯。
 
@@ -100,12 +101,13 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
 - 多个 H1 只有在多个同等显著标题导致主标题不清时报告；`"use client"` 不等于 CSR-only。
 - 缺 canonical、缺 description 或固定字数不足都不能脱离索引意图、重复信号和页面任务自动升为 P1。
 - 文案规则只检查可映射到公开页面的用户可见内容；PRD、注释、法律免责声明不能直接升级为页面问题。
+- 普通互链、单向外链和“已检查页面未观察到回链”都不是垃圾链接结论；只有 rubric 定义的多域模板/伙伴页组合模式才能生成 P2。
 
 **完成标准：** 每条 finding 满足报告协议的必填证据字段；没有由“未搜到”、路径污染或读取失败生成的已确认结论。
 
 ### 5. 报告并复核
 
-按 schema v2 输出固定的 `scope`、`coverage`、`routes`、`findings`、`adsense`。中文结论先写 coverage，再写 Confirmed 问题，再列 Candidate/Unknown 和最小修复动作。coverage 不完整时禁止写“未发现问题”。
+按 schema v2 输出固定的 `scope`、`coverage`、`routes`、`findings`、`link_analysis`、`adsense`。中文结论先写 coverage 和互链验证覆盖，再写 Confirmed 问题，再列 Candidate/Unknown 和最小修复动作。互链验证失败只影响 `link_analysis`，不得污染主站 coverage；coverage 不完整时禁止写“未发现问题”。
 
 仅当用户明确要求 AdSense 时加 `--adsense`，并加载：
 

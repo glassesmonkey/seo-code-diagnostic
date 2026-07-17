@@ -1,6 +1,6 @@
 # SEO Code Diagnostic
 
-一个 URL-first、evidence-gated 的 Codex SEO 诊断 skill。它把路由覆盖、当前 HTTP/静态渲染证据和源码线索分开，避免把构建产物或启发式命中误报成线上问题。
+一个 URL-first、evidence-gated 的 Codex SEO 诊断 skill。它把路由覆盖、当前 HTTP/静态渲染证据和源码线索分开，避免把构建产物或启发式命中误报成线上问题；运行时模式还会受控验证站外互链。
 
 ## 安装
 
@@ -77,6 +77,14 @@ python scripts/seo_code_audit.py \
 
 `--routes-file` 提供页面级 `index_intent`、`priority`、`keywords` 和 `intent_source`。`--keywords` 只保留为未映射词清单，不会应用到每个页面。
 
+同时提供 `--base-url` 和 `--domain` 时，`--reciprocal-links auto` 默认检查未限定站外链接的目标页和对方首页。每个站外请求都会暴露扫描 IP 与工具 User-Agent；如需保持纯站内验证，显式添加：
+
+```bash
+--reciprocal-links off
+```
+
+互链本身不会自动成为问题。只有至少 3 个不同站外主机形成已确认的双方 follow 链接，并同时出现全站模板重复或集中伙伴页模式，才会生成 `RECIPROCAL_LINK_NETWORK_PATTERN` P2。
+
 静态框架可传入本轮生成的目录：
 
 ```bash
@@ -104,13 +112,13 @@ python scripts/seo_code_audit.py \
 - `seo-audit.json`
 - `seo-audit.md`
 
-每份 JSON 固定包含 `scope`、`coverage`、`routes`、`findings`、`adsense`。finding 的证据状态为：
+每份 JSON 固定包含 `scope`、`coverage`、`routes`、`findings`、`link_analysis`、`adsense`。finding 的证据状态为：
 
 - `Confirmed`：当前 URL 响应或可复现仓库事实已证明；
 - `Candidate`：源码启发式或仍需映射/解释的线索；
 - `Unknown`：覆盖、读取或解析证据不足。
 
-P0–P2 汇总只统计 `Confirmed`。coverage 不完整时不能得出“未发现问题”。AdSense 页面数、文章数和内容状态只按已验证 URL 计算；完整审核必须覆盖 73 个 ADS ID，且状态只能是 `Pass / Fail / Unknown / N/A`。
+P0–P2 汇总只统计 `Confirmed`。coverage 不完整时不能得出“未发现问题”。第三方请求失败只进入 `link_analysis.gaps`，不会污染主站 coverage。AdSense 页面数、文章数和内容状态只按已验证 URL 计算；完整审核必须覆盖 73 个 ADS ID，且状态只能是 `Pass / Fail / Unknown / N/A`。
 
 复跑稳定性使用 `scope.provenance.result_hash` 比较；生成时间不参与该哈希。
 

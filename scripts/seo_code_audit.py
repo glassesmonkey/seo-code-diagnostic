@@ -25,9 +25,11 @@ import argparse
 import datetime as _dt
 import fnmatch
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -35,10 +37,10 @@ from collections import Counter
 from dataclasses import dataclass, asdict
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 EXCLUDED_DIR_NAMES = {
     ".git",
@@ -163,6 +165,13 @@ COPY_REVIEW_SOURCE_EXTS = {".jsx", ".tsx", ".vue", ".svelte", ".astro", ".md", "
 MAX_READ_BYTES = 700_000
 MAX_HTTP_BYTES = 2_000_000
 HTTP_TIMEOUT_SECONDS = 8
+MAX_EXTERNAL_HTTP_BYTES = 1_000_000
+EXTERNAL_HTTP_TIMEOUT_SECONDS = 5
+MAX_EXTERNAL_REDIRECTS = 3
+MAX_RECIPROCAL_DOMAINS = 20
+MAX_RECIPROCAL_LINK_SAMPLES = 10
+EXTERNAL_FETCH_WORKERS = 4
+QUALIFIED_REL_VALUES = {"nofollow", "sponsored", "ugc"}
 
 SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 
@@ -197,6 +206,19 @@ class HTTPResult:
     content_type: Optional[str]
 
 
+@dataclass
+class ExternalHTTPResult:
+    requested_url: str
+    final_url: Optional[str]
+    status_code: Optional[int]
+    content_type: Optional[str]
+    text: str
+    truncated: bool
+    error: Optional[str]
+    checked_urls: List[str]
+    content_hash: Optional[str]
+
+
 class SEOHTMLParser(HTMLParser):
     """Small stdlib HTML parser for SEO-relevant signals."""
 
@@ -210,6 +232,7 @@ class SEOHTMLParser(HTMLParser):
         self.meta: Dict[str, str] = {}
         self.meta_props: Dict[str, str] = {}
         self.canonicals: List[str] = []
+        self.base_href = ""
         self.links: List[Dict[str, str]] = []
         self.images: List[Dict[str, str]] = []
         self.iframes: List[Dict[str, str]] = []
@@ -218,6 +241,7 @@ class SEOHTMLParser(HTMLParser):
         self.json_ld_count = 0
         self._script_type_stack: List[str] = []
         self._script_data_stack: List[Optional[List[str]]] = []
+        self._anchor_stack: List[int] = []
         self.json_ld_blocks: List[str] = []
 
     def _attrs(self, attrs: List[Tuple[str, Optional[str]]]) -> Dict[str, str]:
@@ -243,10 +267,25 @@ class SEOHTMLParser(HTMLParser):
             href = attr.get("href", "").strip()
             if "canonical" in rel and href:
                 self.canonicals.append(href)
+        elif tag == "base" and not self.base_href:
+            self.base_href = attr.get("href", "").strip()
         elif re.fullmatch(r"h[1-6]", tag):
             self.current_heading = {"level": int(tag[1]), "text": ""}
         elif tag == "a":
-            self.links.append({"href": attr.get("href", ""), "text": ""})
+            zone = "body"
+            for ancestor in reversed(self.stack[:-1]):
+                if ancestor in {"main", "nav", "footer", "aside", "body"}:
+                    zone = ancestor
+                    break
+            self.links.append(
+                {
+                    "href": attr.get("href", ""),
+                    "text": "",
+                    "rel": attr.get("rel", ""),
+                    "zone": zone,
+                }
+            )
+            self._anchor_stack.append(len(self.links) - 1)
         elif tag == "img":
             self.images.append(
                 {
@@ -288,6 +327,8 @@ class SEOHTMLParser(HTMLParser):
             script_data = self._script_data_stack.pop() if self._script_data_stack else None
             if script_data is not None:
                 self.json_ld_blocks.append("".join(script_data).strip())
+        elif tag == "a" and self._anchor_stack:
+            self._anchor_stack.pop()
 
         # Pop from the right until the matching tag if the markup is imperfect.
         for i in range(len(self.stack) - 1, -1, -1):
@@ -304,9 +345,9 @@ class SEOHTMLParser(HTMLParser):
             self.title_parts.append(data)
         if self.current_heading is not None:
             self.current_heading["text"] = str(self.current_heading.get("text", "")) + data
-        if self.links:
-            # This is approximate: enough to make anchor text visible in the JSON.
-            self.links[-1]["text"] = normalize_ws(self.links[-1].get("text", "") + " " + data)
+        if self._anchor_stack:
+            anchor = self.links[self._anchor_stack[-1]]
+            anchor["text"] = normalize_ws(anchor.get("text", "") + " " + data)
 
         hidden_context = {"head", "title", "script", "style", "svg", "canvas", "template"}
         if any(tag in hidden_context for tag in self.stack):
@@ -327,6 +368,493 @@ class SEOHTMLParser(HTMLParser):
 
 def normalize_ws(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+
+def sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def link_rel_tokens(value: str) -> List[str]:
+    return sorted({token.lower() for token in re.split(r"[\s,]+", value or "") if token})
+
+
+def normalized_hostname(value: str) -> str:
+    host = (urlparse(value).hostname or value or "").strip().lower().rstrip(".")
+    try:
+        return host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return host
+
+
+def site_host_aliases(domain: Optional[str]) -> set:
+    if not domain:
+        return set()
+    host = normalized_hostname(domain)
+    if not host:
+        return set()
+    aliases = {host}
+    if host.startswith("www."):
+        aliases.add(host[4:])
+    else:
+        aliases.add("www." + host)
+    return aliases
+
+
+def extract_page_link_evidence(
+    parser: SEOHTMLParser,
+    page_url: str,
+    route: str,
+    domain: str,
+    *,
+    index_intent: str = "index",
+    indexability: str = "indexable",
+) -> Dict[str, object]:
+    internal_hosts = site_host_aliases(domain)
+    base_url = urljoin(page_url, parser.base_href) if parser.base_href else page_url
+    external_links: List[Dict[str, object]] = []
+    total_crawlable = 0
+    for link in parser.links:
+        href = normalize_ws(link.get("href", ""))
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        absolute = urljoin(base_url, href)
+        parsed = urlparse(absolute)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            continue
+        total_crawlable += 1
+        target_host = normalized_hostname(absolute)
+        if target_host in internal_hosts:
+            continue
+        rel_values = link_rel_tokens(link.get("rel", ""))
+        target_url = parsed._replace(fragment="").geturl()
+        external_links.append(
+            {
+                "target_url": target_url,
+                "target_host": target_host,
+                "anchor_text": normalize_ws(link.get("text", ""))[:160],
+                "rel": rel_values,
+                "zone": link.get("zone", "body"),
+                "qualified": bool(QUALIFIED_REL_VALUES & set(rel_values)),
+                "source_route": route,
+                "source_url": page_url,
+            }
+        )
+    return {
+        "route": route,
+        "source_url": page_url,
+        "title": parser.title,
+        "h1": [heading.get("text", "") for heading in parser.headings if heading.get("level") == 1],
+        "index_intent": index_intent,
+        "indexability": indexability,
+        "total_crawlable_links": total_crawlable,
+        "external_links": external_links,
+    }
+
+
+def validate_public_http_url(
+    value: str,
+    *,
+    resolver: Callable[..., object] = socket.getaddrinfo,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return a normalized public HTTP URL or a stable safety error."""
+    raw = normalize_ws(value)
+    if not raw or any(ord(char) < 32 for char in raw):
+        return None, "invalid_url"
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return None, "scheme_or_host_invalid"
+    if parsed.username is not None or parsed.password is not None:
+        return None, "userinfo_forbidden"
+    try:
+        port = parsed.port
+    except ValueError:
+        return None, "port_invalid"
+    if port not in {None, 80, 443}:
+        return None, "port_forbidden"
+    host = normalized_hostname(parsed.hostname)
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return None, "ip_literal_forbidden"
+
+    lookup_port = port or (443 if parsed.scheme.lower() == "https" else 80)
+    try:
+        addresses = resolver(host, lookup_port, type=socket.SOCK_STREAM)
+    except (OSError, socket.gaierror):
+        return None, "dns_resolution_failed"
+    if not addresses:
+        return None, "dns_resolution_failed"
+    for address in addresses:
+        try:
+            resolved = ipaddress.ip_address(str(address[4][0]).split("%", 1)[0])
+        except (ValueError, IndexError, TypeError):
+            return None, "dns_address_invalid"
+        if not resolved.is_global:
+            return None, "private_address_forbidden"
+
+    hostname = host
+    if ":" in hostname:
+        hostname = f"[{hostname}]"
+    netloc = hostname
+    if port and port != (443 if parsed.scheme.lower() == "https" else 80):
+        netloc += f":{port}"
+    normalized = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=netloc,
+        fragment="",
+    ).geturl()
+    return normalized, None
+
+
+def _external_request_once(url: str) -> HTTPResult:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "seo-code-diagnostic/2 reciprocal-link-check",
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+        },
+    )
+    opener = build_opener(ProxyHandler({}), NoRedirectHandler())
+    response = None
+    try:
+        response = opener.open(request, timeout=EXTERNAL_HTTP_TIMEOUT_SECONDS)
+    except HTTPError as exc:
+        response = exc
+    except (URLError, TimeoutError, OSError) as exc:
+        return HTTPResult(url, None, {}, b"", "", False, type(exc).__name__, None, None, None)
+    try:
+        status = int(response.getcode())
+        headers = {str(key).lower(): str(value) for key, value in response.headers.items()}
+        data = response.read(MAX_EXTERNAL_HTTP_BYTES + 1)
+        truncated = len(data) > MAX_EXTERNAL_HTTP_BYTES
+        data = data[:MAX_EXTERNAL_HTTP_BYTES]
+        content_type = headers.get("content-type")
+        location = headers.get("location")
+        final_url = urljoin(url, location) if location and 300 <= status < 400 else response.geturl()
+        return HTTPResult(
+            url,
+            status,
+            headers,
+            data,
+            decode_http_body(data, content_type),
+            truncated,
+            None,
+            location,
+            final_url,
+            content_type,
+        )
+    except (OSError, ValueError) as exc:
+        return HTTPResult(url, None, {}, b"", "", False, type(exc).__name__, None, None, None)
+    finally:
+        if response is not None:
+            response.close()
+
+
+def fetch_public_http(
+    value: str,
+    *,
+    resolver: Callable[..., object] = socket.getaddrinfo,
+    request_once: Callable[[str], HTTPResult] = _external_request_once,
+) -> ExternalHTTPResult:
+    """Fetch one public page while validating the initial URL and every redirect."""
+    current, error = validate_public_http_url(value, resolver=resolver)
+    if error or not current:
+        return ExternalHTTPResult(value, None, None, None, "", False, error, [], None)
+
+    checked: List[str] = []
+    for redirect_count in range(MAX_EXTERNAL_REDIRECTS + 1):
+        checked.append(current)
+        result = request_once(current)
+        if result.error or result.status_code is None:
+            return ExternalHTTPResult(
+                value,
+                result.final_url,
+                result.status_code,
+                result.content_type,
+                result.text,
+                result.truncated,
+                result.error or "external_request_failed",
+                checked,
+                sha256_text(result.text) if result.text else None,
+            )
+        if 300 <= result.status_code < 400 and result.location:
+            if redirect_count >= MAX_EXTERNAL_REDIRECTS:
+                return ExternalHTTPResult(
+                    value, current, result.status_code, result.content_type, "", False,
+                    "redirect_limit_exceeded", checked, None,
+                )
+            next_url = urljoin(current, result.location)
+            normalized, redirect_error = validate_public_http_url(next_url, resolver=resolver)
+            if redirect_error or not normalized:
+                return ExternalHTTPResult(
+                    value, current, result.status_code, result.content_type, "", False,
+                    f"redirect_{redirect_error or 'invalid_url'}", checked, None,
+                )
+            current = normalized
+            continue
+        final_url = result.final_url or current
+        normalized_final, final_error = validate_public_http_url(final_url, resolver=resolver)
+        if final_error or not normalized_final:
+            return ExternalHTTPResult(
+                value, current, result.status_code, result.content_type, "", False,
+                f"final_{final_error or 'invalid_url'}", checked, None,
+            )
+        return ExternalHTTPResult(
+            value,
+            normalized_final,
+            result.status_code,
+            result.content_type,
+            result.text,
+            result.truncated,
+            None,
+            checked,
+            sha256_text(result.text) if result.text else None,
+        )
+    return ExternalHTTPResult(value, current, None, None, "", False, "redirect_limit_exceeded", checked, None)
+
+
+def empty_link_analysis(reason: str) -> Dict[str, object]:
+    return {
+        "status": "not_run",
+        "reason": reason,
+        "candidate_domain_total": 0,
+        "selected_domain_total": 0,
+        "skipped_domain_total": 0,
+        "verified_page_total": 0,
+        "reciprocal_domain_total": 0,
+        "targets": [],
+        "gaps": [],
+    }
+
+
+def _reverse_links(html: str, page_url: str, site_domain: str) -> List[Dict[str, object]]:
+    parser = parse_runtime_html(html)
+    site_hosts = site_host_aliases(site_domain)
+    base_url = urljoin(page_url, parser.base_href) if parser.base_href else page_url
+    matches: List[Dict[str, object]] = []
+    for link in parser.links:
+        href = normalize_ws(link.get("href", ""))
+        if not href:
+            continue
+        absolute = urljoin(base_url, href)
+        parsed = urlparse(absolute)
+        if parsed.scheme.lower() not in {"http", "https"} or normalized_hostname(absolute) not in site_hosts:
+            continue
+        rel_values = link_rel_tokens(link.get("rel", ""))
+        matches.append(
+            {
+                "url": parsed._replace(fragment="").geturl(),
+                "anchor_text": normalize_ws(link.get("text", ""))[:160],
+                "rel": rel_values,
+                "zone": link.get("zone", "body"),
+                "qualified": bool(QUALIFIED_REL_VALUES & set(rel_values)),
+                "checked_page": page_url,
+            }
+        )
+    return matches[:MAX_RECIPROCAL_LINK_SAMPLES]
+
+
+def analyze_reciprocal_links(
+    pages: List[Dict[str, object]],
+    domain: str,
+    *,
+    fetcher: Callable[[str], ExternalHTTPResult] = fetch_public_http,
+) -> Tuple[Dict[str, object], List[Dict[str, object]]]:
+    """Record bounded reciprocal-link evidence and flag only composite network patterns."""
+    by_host: Dict[str, Dict[str, object]] = {}
+    for page in pages:
+        for link in page.get("external_links", []):
+            if not isinstance(link, dict) or link.get("qualified"):
+                continue
+            host = normalized_hostname(str(link.get("target_host") or ""))
+            if not host:
+                continue
+            bucket = by_host.setdefault(host, {"host": host, "forward_links": []})
+            samples = bucket["forward_links"]
+            if len(samples) < MAX_RECIPROCAL_LINK_SAMPLES:
+                samples.append(dict(link))
+
+    candidate_hosts = sorted(by_host)
+    selected_hosts = candidate_hosts[:MAX_RECIPROCAL_DOMAINS]
+    gaps: List[Dict[str, object]] = []
+    targets_by_final_host: Dict[str, Dict[str, object]] = {}
+    verified_page_total = 0
+
+    for host in selected_hosts:
+        forward_links = list(by_host[host]["forward_links"])
+        target_url = str(forward_links[0].get("target_url") or "")
+        checked_results: List[ExternalHTTPResult] = []
+        primary = fetcher(target_url)
+        checked_results.append(primary)
+        result = primary
+        final_url = result.final_url or target_url
+        final_host = normalized_hostname(final_url) or host
+        target = targets_by_final_host.setdefault(
+            final_host,
+            {
+                "target_host": final_host,
+                "forward_links": [],
+                "checked_urls": [],
+                "reverse_status": "unknown",
+                "reverse_links": [],
+                "reverse_follow": False,
+                "signals": [],
+            },
+        )
+        for sample in forward_links:
+            if len(target["forward_links"]) < MAX_RECIPROCAL_LINK_SAMPLES:
+                target["forward_links"].append(sample)
+
+        def add_gap(reason: str, external_result: ExternalHTTPResult) -> None:
+            gaps.append(
+                {
+                    "target_host": final_host,
+                    "reason": reason,
+                    "path_or_url": external_result.requested_url,
+                }
+            )
+
+        if result.error or result.status_code is None:
+            add_gap("external_request_failed", result)
+            continue
+        if result.truncated:
+            add_gap("external_body_truncated", result)
+            continue
+        if result.status_code != 200:
+            add_gap("external_http_status", result)
+            continue
+        if not result.content_type or "html" not in result.content_type.lower():
+            add_gap("external_non_html", result)
+            continue
+
+        verified_page_total += 1
+        target["checked_urls"].extend(url for url in result.checked_urls if url not in target["checked_urls"])
+        reverse = _reverse_links(result.text, final_url, domain)
+        parsed_final = urlparse(final_url)
+        home_url = f"{parsed_final.scheme}://{parsed_final.netloc}/"
+        if not reverse and final_url.rstrip("/") != home_url.rstrip("/"):
+            home = fetcher(home_url)
+            checked_results.append(home)
+            if home.error or home.status_code is None:
+                add_gap("external_request_failed", home)
+            elif home.truncated:
+                add_gap("external_body_truncated", home)
+            elif home.status_code != 200:
+                add_gap("external_http_status", home)
+            elif not home.content_type or "html" not in home.content_type.lower():
+                add_gap("external_non_html", home)
+            else:
+                verified_page_total += 1
+                target["checked_urls"].extend(url for url in home.checked_urls if url not in target["checked_urls"])
+                reverse = _reverse_links(home.text, home.final_url or home_url, domain)
+
+        if reverse:
+            target["reverse_status"] = "reverse_link_observed"
+            existing = {(item.get("url"), item.get("checked_page")) for item in target["reverse_links"]}
+            for match in reverse:
+                key = (match.get("url"), match.get("checked_page"))
+                if key not in existing and len(target["reverse_links"]) < MAX_RECIPROCAL_LINK_SAMPLES:
+                    target["reverse_links"].append(match)
+                    existing.add(key)
+            target["reverse_follow"] = any(not item.get("qualified") for item in target["reverse_links"])
+        elif not any(item.error or item.truncated or item.status_code != 200 for item in checked_results):
+            target["reverse_status"] = "not_observed_on_checked_pages"
+
+    targets = [targets_by_final_host[key] for key in sorted(targets_by_final_host)]
+    reciprocal_targets = [item for item in targets if item.get("reverse_status") == "reverse_link_observed"]
+    follow_targets = [item for item in reciprocal_targets if item.get("reverse_follow")]
+
+    affected_routes = sorted(
+        {
+            str(link.get("source_route"))
+            for target in follow_targets
+            for link in target.get("forward_links", [])
+            if link.get("source_route")
+        }
+    )
+    repeated_hosts = [
+        target
+        for target in follow_targets
+        if len({str(link.get("source_route")) for link in target.get("forward_links", [])}) >= 3
+        and any(link.get("zone") in {"footer", "nav", "aside"} for link in target.get("forward_links", []))
+    ]
+    partner_routes = {
+        str(page.get("route"))
+        for page in pages
+        if re.search(r"\b(?:link\s+partners?|partners?|resources?)\b", str(page.get("title") or ""), flags=re.I)
+        and len(page.get("external_links", [])) >= 3
+    }
+    partner_hosts = [
+        target
+        for target in follow_targets
+        if any(
+            str(link.get("source_route")) in partner_routes
+            for link in target.get("forward_links", [])
+        )
+    ]
+    signals: List[str] = []
+    pattern_hosts: List[Dict[str, object]] = []
+    if len(repeated_hosts) >= 3:
+        signals.append("sitewide_template")
+        pattern_hosts = repeated_hosts
+    if len(partner_hosts) >= 3:
+        signals.append("partner_page")
+        pattern_hosts = list({str(item["target_host"]): item for item in pattern_hosts + partner_hosts}.values())
+
+    findings: List[Dict[str, object]] = []
+    if signals and len(pattern_hosts) >= 3:
+        affected_hosts = sorted(str(item["target_host"]) for item in pattern_hosts)
+        pattern_routes = sorted(
+            {
+                str(link.get("source_route"))
+                for target in pattern_hosts
+                for link in target.get("forward_links", [])
+                if link.get("source_route")
+            }
+        )
+        evidence = (
+            f"本轮确认 {len(affected_hosts)} 个站外主机与本站存在双方 follow 链接，"
+            f"并形成 {', '.join(signals)} 模式"
+        )
+        findings.append(
+            {
+                "code": "RECIPROCAL_LINK_NETWORK_PATTERN",
+                "status": "Confirmed",
+                "impact": "P2",
+                "route": None,
+                "route_kind": "public",
+                "index_intent": "unknown",
+                "indexability": "unknown",
+                "runtime_reachable": True,
+                "status_code": 200,
+                "evidence_kind": "http",
+                "path_or_url": domain,
+                "provenance": {
+                    "mode": "runtime_reciprocal",
+                    "signals": signals,
+                    "content_hash": sha256_text(evidence + "|" + "|".join(affected_hosts + pattern_routes)),
+                },
+                "evidence": evidence,
+                "recommendation": "复核这些互链是否为真实编辑关系；不需要传递排名信号的链接使用 nofollow、sponsored 或 ugc。",
+                "affected_routes": pattern_routes,
+                "affected_hosts": affected_hosts,
+            }
+        )
+
+    analysis = {
+        "status": "partial" if gaps or len(candidate_hosts) > len(selected_hosts) else "complete",
+        "reason": None,
+        "candidate_domain_total": len(candidate_hosts),
+        "selected_domain_total": len(selected_hosts),
+        "skipped_domain_total": max(0, len(candidate_hosts) - len(selected_hosts)),
+        "verified_page_total": verified_page_total,
+        "reciprocal_domain_total": len(reciprocal_targets),
+        "targets": targets,
+        "gaps": sorted(gaps, key=lambda item: (str(item.get("target_host")), str(item.get("reason")))),
+    }
+    return analysis, findings
 
 
 def read_text_state(path: Path) -> ReadState:
@@ -2577,6 +3105,22 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
             )
         lines.append("")
 
+    link_analysis = dict(result.get("link_analysis", {}))
+    lines.extend(
+        [
+            "## 互链验证",
+            f"- 状态：{escape_md(link_analysis.get('status'))}",
+            f"- 候选站外主机：{int(link_analysis.get('candidate_domain_total', 0) or 0)}",
+            f"- 已选择主机：{int(link_analysis.get('selected_domain_total', 0) or 0)}",
+            f"- 观察到回链的主机：{int(link_analysis.get('reciprocal_domain_total', 0) or 0)}",
+        ]
+    )
+    if link_analysis.get("reason"):
+        lines.append(f"- 未运行原因：{escape_md(link_analysis.get('reason'))}")
+    if link_analysis.get("gaps"):
+        lines.append(f"- 独立验证缺口：{len(link_analysis.get('gaps', []))}")
+    lines.append("")
+
     lines.extend(
         [
             "## Findings",
@@ -2638,6 +3182,7 @@ def stable_result_hash(result: Dict[str, object]) -> str:
     scope = comparable.get("scope")
     if isinstance(scope, dict):
         scope.pop("started_at", None)
+        scope.pop("output_paths", None)
         provenance = scope.get("provenance")
         if isinstance(provenance, dict):
             provenance.pop("result_hash", None)
@@ -2648,7 +3193,11 @@ def stable_result_hash(result: Dict[str, object]) -> str:
 # ---------- main ----------
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(
+    argv: Optional[List[str]] = None,
+    *,
+    reciprocal_fetcher: Optional[Callable[[str], ExternalHTTPResult]] = None,
+) -> int:
     parser = argparse.ArgumentParser(description="Offline static SEO code audit helper.")
     parser.add_argument("--root", default=".", help="Repository/site root to scan.")
     parser.add_argument("--domain", default="", help="Canonical production domain, e.g. https://example.com")
@@ -2659,6 +3208,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--routes-file", default="", help="JSON route intent mapping.")
     parser.add_argument("--rendered-root", default="", help="Static output produced by the current audit run.")
     parser.add_argument("--exclude", action="append", default=[], help="Additional root-relative glob to exclude; repeatable.")
+    parser.add_argument(
+        "--reciprocal-links",
+        choices=["auto", "off"],
+        default="auto",
+        help="Check bounded public reciprocal links in runtime mode; use off to prevent third-party requests.",
+    )
     args = parser.parse_args(argv)
     if args.base_url and args.rendered_root:
         parser.error("--base-url and --rendered-root cannot be used together")
@@ -2793,13 +3348,46 @@ def main(argv: Optional[List[str]] = None) -> int:
     resolve_dynamic_patterns(route_map)
     routes = [route_map[key] for key in sorted(route_map)]
     runtime_findings: List[Dict[str, object]] = []
+    runtime_link_pages: List[Dict[str, object]] = []
     gaps: List[Dict[str, object]] = list(sitemap_gaps)
     if runtime_enabled:
         for route in routes:
-            route_findings, gap = verify_runtime_route(route, base_url, domain)
+            response = None if route.get("is_pattern") else fetch_http(
+                runtime_url(base_url, str(route.get("route") or "/"))
+            )
+            route_findings, gap = verify_runtime_route(
+                route,
+                base_url,
+                domain,
+                provided_result=response,
+            )
             runtime_findings.extend(route_findings)
             if gap:
                 gaps.append(gap)
+            if (
+                domain
+                and route.get("scored")
+                and route.get("coverage_status") == "verified"
+                and route.get("indexability") == "indexable"
+                and response is not None
+                and response.status_code == 200
+                and not response.error
+                and not response.truncated
+                and response.content_type
+                and "html" in response.content_type.lower()
+            ):
+                route_path = str(route.get("route") or "/")
+                public_url = domain.rstrip("/") + (route_path if route_path.startswith("/") else "/" + route_path)
+                runtime_link_pages.append(
+                    extract_page_link_evidence(
+                        parse_runtime_html(response.text),
+                        public_url,
+                        route_path,
+                        domain,
+                        index_intent=str(route.get("index_intent") or "unknown"),
+                        indexability=str(route.get("indexability") or "unknown"),
+                    )
+                )
         site_blocked = robots_disallows_all(robots_result)
         if site_blocked:
             for route in routes:
@@ -2891,6 +3479,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "HTTP response from --base-url or a current-run rendered artifact",
                     )
                 )
+
+    if args.reciprocal_links == "off":
+        link_analysis = empty_link_analysis("disabled")
+    elif not runtime_enabled:
+        link_analysis = empty_link_analysis("runtime_required")
+    elif not domain:
+        link_analysis = empty_link_analysis("domain_required")
+    else:
+        link_analysis, reciprocal_findings = analyze_reciprocal_links(
+            runtime_link_pages,
+            domain,
+            fetcher=reciprocal_fetcher or fetch_public_http,
+        )
+        runtime_findings.extend(reciprocal_findings)
 
     debug_result: Dict[str, object] = {
         "html_pages": html_pages,
@@ -3005,6 +3607,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "domain": domain,
             "base_url": base_url,
             "rendered_root": str(rendered_root) if rendered_root else None,
+            "reciprocal_links": args.reciprocal_links,
             "framework": framework_slug(project),
             "mode": mode,
             "source_commit": commit,
@@ -3021,6 +3624,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "coverage": coverage,
         "routes": routes,
         "findings": findings,
+        "link_analysis": link_analysis,
         "adsense": build_adsense_contract(bool(args.adsense), routes, coverage),
         "summary": {
             "confirmed_by_impact": coverage["confirmed_counts"],

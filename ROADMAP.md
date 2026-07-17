@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-两阶段可信度重构、skill 文档收敛和安装副本同步全部完成。
+站外互链运行时验证已完成；下一阶段接入 AdSense assessments 完整性校验。
 
 ## 已完成
 
@@ -18,6 +18,7 @@
 - 完成 AdSense 73 项正式清单契约；文章数只统计已验证的注册文章，coverage 不完整时结论保持 `null`。
 - Exact-Statement fresh runtime 验收：27/27 sitemap URL 返回 200 并进入 coverage，4 篇文章计数正确，确认 1 个 P0 index/noindex 冲突和 1 个 P1 soft 404。
 - 已将验证后的源码机械同步到 `~/.codex/skills/seo-code-diagnostic`；逐文件 diff 为空，安装副本 42/42 测试通过。
+- 完成受控站外互链验证：限制公开 HTTP(S) 目标、逐跳校验重定向、隔离第三方 coverage gap，并只对至少 3 个双方 follow 主机组成的模板/伙伴页模式生成 P2。
 
 ## 进行中
 
@@ -25,7 +26,7 @@
 
 ## 待办
 
-- 无（本轮计划全部完成）。
+- 增加 73 项 AdSense assessments 校验器、readiness 聚合和修复成本排序。
 
 ## 阻塞
 
@@ -33,7 +34,7 @@
 
 ## 最近验证
 
-1. 2026-07-13：fresh clone 与初始安装副本内容一致（排除 `.git` 和 `__pycache__`）。
+1. 2026-07-17：互链 Phase 3 的 54/54 单元测试、`py_compile` 与 `git diff --check` 通过。
 2. 2026-07-13：Exact-Statement 基准与路由真相采用只读检查获得，项目 Git 状态保持 clean。
 3. 2026-07-13：阶段 1 的 17/17 测试、`py_compile` 与 `git diff --check` 通过。
 4. 2026-07-13：阶段 1 fixture 端到端扫描为 `Confirmed P0-P3=0`，无 URL 证据的 AdSense 73 项保持 Unknown。
