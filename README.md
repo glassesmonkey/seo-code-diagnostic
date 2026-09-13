@@ -2,6 +2,8 @@
 
 一个用于 Codex 的网站代码 SEO 和 AdSense 审核诊断 skill。
 
+它是**代码仓库审计**，不是 Ahrefs / Google Search Console 的替代品。`SKILL.md` 的工作流和报告主表按 [2026 Zyppy Google Ranking Factors Expert Survey](https://signal.zyppy.com/p/google-ranking-factors-expert-survey) 的 Top 10 组织（Relevance → Internal Links）。每个因素含**专家实战要点**（调查观察 → 可执行 Pass/Fail/Unknown），不只是百分比。专家共识 ≠ Google 官方权重。旧 TDK / 密度 / 八模块落地页不再当目录，只作为对应因素的子项。F1 含域名意图匹配 / EMD 观察（专家评论，≠ 官方保证；品牌域非 EMD 不 Fail）。meta description 只挂在 F5 CTR；密度只抓堆砌。没有 GSC/外链表/品牌数据时，F2/F5/F6/F7 等线上信号必须 `Unknown`。
+
 ## 安装
 
 把整个 `seo-code-diagnostic/` 文件夹放到以下任意位置：
@@ -40,13 +42,14 @@ Cover every ADS-* requirement ID with Pass/Fail/Unknown/N/A, evidence, next acti
 
 ## 包含内容
 
-- `SKILL.md`：Codex 主要工作流和诊断规则。
-- `scripts/seo_code_audit.py`：离线静态扫描脚本，输出 JSON/Markdown。
-- `references/ahrefs-learning-notes.md`：Ahrefs 官方教程的诊断化学习笔记。
-- `references/adsense-requirements.md`：AdSense 官方来源驱动的 ADS-* 完整审核清单、状态规则和输出协议。
-- `references/adsense-review-diagnostic.md`：AdSense 审核、low value content 和游戏/工具站薄壳风险诊断。
-- `references/seo-principles.md`：中文 SEO 方法论和诊断原则的结构化整理。
-- `references/diagnostic-rubric.md`：P0–P3 诊断标准。
+- `SKILL.md`：按 F1–F10 组织的诊断流和报告模板。
+- `scripts/seo_code_audit.py`：离线静态扫描；Markdown/JSON 主表对齐 Top 10。
+- `references/zyppy-2026-ranking-factors.md`：调研摘要 + skill 章节↔因素映射。
+- `references/seo-principles.md`：按 Top 10 写的方法论。
+- `references/diagnostic-rubric.md`：按 Top 10 重组的严重级别。
+- `references/ahrefs-learning-notes.md`：Ahrefs 教程的诊断化笔记（与 Zyppy 冲突时以代码审计规则为准）。
+- `references/adsense-requirements.md`：ADS-* 完整清单（独立章节）。
+- `references/adsense-review-diagnostic.md`：AdSense 薄壳/low value 经验。
 - `agents/openai.yaml`：Codex UI 元信息。
 
 ## 静态扫描脚本用法
@@ -86,4 +89,4 @@ python scripts/seo_code_audit.py \
 - `YMYL_COPY_REVIEW`：健康、财务、安全、法律等 YMYL 主题出现建议、承诺、保证、诊断、收益、治疗等高风险表达。
 - `INTERNAL_COPY_LEAK`：内部要求、prompt、模型思考过程、草稿说明、占位文案等不能直接面向用户的文案。
 
-注意：脚本只做静态离线检查，并把能证明的风险映射到相关 ADS-* ID。完整 SEO / AdSense 判断还需要构建后查看 HTML、线上抓取、Google Search Console、Ahrefs Site Audit、竞品 SERP、AdSense 拒绝原因、账号状态、版权授权、真实流量和关键词数据。完整 AdSense 审核必须按 `references/adsense-requirements.md` 覆盖全部 73 个 ADS-* ID，并做 Completeness Check。
+注意：脚本只做静态离线检查，并把能证明的风险映射到相关 ADS-* ID。关键词参数用于覆盖和堆砌检查，不是密度达标工具。完整 SEO / AdSense 判断还需要构建后查看 HTML、线上抓取、Google Search Console、Ahrefs Site Audit、竞品 SERP、AdSense 拒绝原因、账号状态、版权授权、真实流量和关键词数据。没有这些数据时，GSC CTR、品牌查询、外链质量保持 Unknown。完整 AdSense 审核必须按 `references/adsense-requirements.md` 覆盖全部 73 个 ADS-* ID，并做 Completeness Check。

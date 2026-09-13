@@ -1,8 +1,10 @@
 # Ahrefs SEO 学习笔记（用于本 skill 的诊断规则）
 
-Last reviewed: 2026-06-09
+Last reviewed: 2026-09-13
 
 这些笔记是对 Ahrefs 官方 SEO 教程/指南的诊断化整理，目的是让 Codex 在看代码时有统一判断标准。不要把这些笔记当作排名保证；它们只提供 on-page、technical、content、internal link 的审计框架。
+
+与 `zyppy-2026-ranking-factors.md` 冲突时：以 SKILL 的 F1–F10 主骨架 + 不编造线上指标为准。description 只进 F5 CTR；密度不是目标；F8 是 table stakes。这些笔记不再当诊断目录。
 
 ## 参考来源
 
@@ -43,13 +45,13 @@ Last reviewed: 2026-06-09
 - FAQ、步骤、比较、表格、示例是否帮助用户快速理解；
 - 页面是否有足够独特信息，而不是和竞品模板化重复。
 
-### 2. Title、meta description、H1 是基础信号
+### 2. Title 相关性、H1 是基础；meta description 主要是 CTR
 
 代码审计时应检查：
 
 - 每个核心页面都有唯一 title；
-- title 里自然包含主关键词或主意图；
-- description 扩展 title，说明具体价值，不做关键词堆叠；
+- title 里自然表达主关键词或主意图（相关性，不是密度）；
+- description 扩展 title，说明具体价值，利于点击；**不要把它当成已被证明的排名因子**，缺了按 P2/P3 CTR 处理；
 - 页面有一个 H1，通常表达页面标题或主搜索意图；
 - H2/H3 用来建立清晰信息层级，而不是做视觉样式。
 
@@ -66,6 +68,8 @@ Last reviewed: 2026-06-09
 - internal links 尽量直接链接 canonical URL，不要链接到参数 URL 或跳转 URL。
 
 ### 4. Technical SEO 的底层任务是让页面可发现、可抓取、可理解、可索引
+
+这是 table stakes：坏的技术实现会输，好的技术实现不会把平庸内容抬上去。不要把 CWV 写成主增长项。
 
 代码审计要优先发现阻断问题：
 
@@ -130,7 +134,7 @@ Last reviewed: 2026-06-09
 3. 内容 gap 分析；
 4. 页面大纲和模块规划；
 5. 文案改写；
-6. TDK/canonical/schema/internal links 实现；
+6. title（相关性 + CTR）、canonical/schema/internal links 实现；description 按 CTR 处理；
 7. 构建后查看 HTML；
-8. 发布后用 GSC/Ahrefs 观察收录、前 20 关键词、内链、外链和流量。
+8. 发布后若用户提供 GSC/Ahrefs，观察收录、点击质量、意图匹配、内链，以及外链是否来自受信任、主题相关、有真实访问的页面；没有数据就标 Unknown，不要编造指标。
 

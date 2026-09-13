@@ -1,6 +1,6 @@
 interface:
   display_name: "SEO Code Diagnostic"
-  short_description: "Audit SEO, AdSense, YMYL and copy leaks."
-  default_prompt: "Use $seo-code-diagnostic to audit this website codebase for SEO, YMYL/internal-copy risks, and AdSense readiness; for AdSense, cover every ADS-* requirement with Pass/Fail/Unknown/N/A and a Completeness Check."
+  short_description: "Codebase SEO audit by Zyppy Top 10 factors; AdSense separate."
+  default_prompt: "Use $seo-code-diagnostic to audit this website codebase using the 2026 Zyppy Top 10 factor workflow (Relevance through Internal Links). Output a 10-row Pass/Fail/Unknown/N/A table. Treat Technical SEO as table stakes. Do not invent GSC/Ahrefs/backlink/CTR numbers. Flag YMYL/internal-copy risks. For AdSense, keep a separate ADS-* completeness check."
 policy:
   allow_implicit_invocation: true

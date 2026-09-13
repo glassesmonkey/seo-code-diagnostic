@@ -1,133 +1,182 @@
 # SEO 代码诊断 Rubric
 
-## P0：必须优先修复
+按 2026 Zyppy Top 10 重组。每一因素先定 `Pass` / `Fail` / `Unknown` / `N/A`，再用 P0–P3 排修复顺序。专家共识 ≠ 官方权重。没有线上数据不要编造。对照 `SKILL.md` 与 `zyppy-2026-ranking-factors.md`。
 
-| 检查项 | 代码证据 | 典型修复 |
-|---|---|---|
-| 核心页面 noindex | `<meta name="robots" content="noindex">` | 去掉 noindex 或按页面类型条件化 |
-| robots.txt 误封全站 | `User-agent: *` + `Disallow: /` | 生产环境允许核心页面抓取 |
-| 纯 CSR 无正文 | 初始 HTML 只有 root div 和 script | SSR/SSG/prerender；把核心文案放进 HTML |
-| canonical 错域名/死链 | canonical 指向 staging、localhost、旧域名、404 | 使用生产 HTTPS 绝对 URL |
-| 动态页面无唯一 HTML | 所有动态页复用同一 TDK/内容 | 基于 slug 数据生成唯一 metadata 和正文 |
-| sitemap/robots 指向测试域 | sitemap URL 是 localhost/staging | 统一生产 canonical host |
+状态规则：
 
-## P1：高影响问题
+- `Fail`：代码或用户提供的线上证据已证明问题。
+- `Unknown`：需要 GSC / 外链表 / 品牌 / 用户研究，且用户没给。
+- `Pass`：该因素在**代码可证范围**内未见问题；hybrid/线上因素没有用户数据时不要标 Pass。
+- `N/A`：该因素对站点类型确实不适用（少见）。
 
-| 检查项 | 代码证据 | 典型修复 |
-|---|---|---|
-| 缺 title | 无 `<title>` / metadata.title | 为每页生成唯一 title |
-| 缺 description | 无 meta description | 写具体收益和搜索意图 |
-| 缺 H1 或多个 H1 | `<h1>` 为 0 或多个 | 每页一个主 H1 |
-| 缺 canonical | 无 rel canonical | 生成自引用 canonical |
-| sitemap 缺失 | 无 sitemap 文件/路由 | 增加 sitemap，列 canonical URL |
-| 重要页面孤儿 | sitemap 有但站内无链接 | 从首页/分类/相关页面加内链 |
-| 全站复用 TDK | layout 里固定 title/description | 动态按页面生成 |
+## F1 Relevance / Search Intent Match（57.1%）
 
-## P2：中影响问题
+定义：满足结果类型/任务；含 information gain。meta description 不在本表。
 
-| 检查项 | 代码证据 | 典型修复 |
-|---|---|---|
-| 内容薄 | 页面文本很少 | 补充定义、步骤、功能、场景、FAQ、案例 |
-| H2/H3 结构差 | 标题跳级或模块混乱 | 分门别类罗列关键词和用户问题 |
-| 内链少 | 页面几乎没有内部链接 | 增加上下级和相关页链接 |
-| 图片缺 alt | `<img>` 无 alt | 为重要图片写描述性 alt |
-| 关键词未覆盖 | 目标词不在可见文本中 | 在 title/H1/首段/H2/FAQ 自然覆盖 |
-| 关键词堆砌 | 密度 > 8% 或重复异常 | 改成语义相关词和真实解释 |
-| FAQ 缺失 | 长落地页无 FAQ | 补充真实问题和原创回答 |
+专家实战（≠ 官方保证）→ 动作：
 
-## P3：增强项
+- 技术完美但答非所问 → `Fail` P1（先判结果形态）。
+- 十页都匹配后比信息增益：有 SERP/竞品且本页无增量 → `Fail` P2；无竞品材料 → 增益 `Unknown`。
+- EMD still effective：host 匹配主意图词写入 F1 行（加分观察）。非 EMD **不** `Fail`。
 
-| 检查项 | 代码证据 | 典型修复 |
-|---|---|---|
-| title/description 长度不佳 | 过短或过长 | 改为更利于点击的表达 |
-| OG/Twitter 不完整 | 缺 og:title/og:image | 增强分享预览 |
-| schema 可增强 | 无 JSON-LD | 按页面类型加真实 schema |
-| 图片尺寸/性能 | 无 width/height、未压缩 | 使用框架图片组件和压缩 |
-| robots 未声明 sitemap | robots.txt 无 Sitemap | 补充 sitemap 地址 |
+| 检查项 | 挂入的旧项 | 级别 | 代码证据 | 修复 |
+|---|---|---|---|---|
+| 结果形态错 / 答非所问 | 意图错配 | P1 | 页面类型与查询要的工具/教程/对比/目录相反 | 改内容或拆页 |
+| 缺 title | TDK title | P1 | 无 title | 写能表达本页任务的唯一 title |
+| title 与任务偏离 | TDK / 关键词覆盖 | P2 | 正文在做 A，title 在说 B | 先改相关性 |
+| 缺 H1 / 多 H1 | 语义结构 | P1 | h1 数量 ≠ 1 | 一个主 H1 表达任务 |
+| 意图模块残缺 | 落地页八模块 | P2 | 工具页无步骤/场景/有增量的 FAQ | 按任务补模块，不是为了凑八块 |
+| 目标词应出现却没有 | 关键词覆盖 | P2 | 可见文本无目标词 | 自然覆盖；不要补密度 |
+| 堆砌 | 密度 | P2 | 密度异常高或机械重复 | 改成解释。不报密度低 |
+| H2/H3 跳级 | 语义结构 | P2/P3 | 标题跳级 | 按用户问题分层 |
+| 域名意图匹配 / EMD | 新子项 | 观察，不单独 Fail | `--domain` 或 canonical host 是否精确/高度匹配主意图词（如 `bankstatementconverter*.*`） | 写入 F1 行。来源：Zyppy 2026 专家评论（EMD still effective），≠ 官方保证。加分观察。品牌域非 EMD **不 Fail**。不要建议购买垃圾 / spammy EMD |
 
-## 页面类型专项
+线上：竞品是否已被同一意图覆盖、你的信息增益够不够 → 常 `Unknown`。EMD 贡献本身也不是官方权重。
 
-### AdSense 审核专项（游戏站 / 工具站优先）
+## F2 Backlinks（54.8%）
 
-核心问题：网站是否值得展示广告，还是像自动生成的低质套壳。
+默认整项 `Unknown`。代码几乎无证。
 
-P0：
+专家实战（≠ 官方保证）→ 动作：
 
-- 站点不可访问、核心页面 4xx/5xx；
-- robots/noindex 阻止核心页面抓取或索引；
-- 缺 Contact、Privacy Policy、Terms of Service 等审核信任基础；
-- 明显侵权、成人、赌博、仇恨、暴力等政策红线；
-- sitemap/canonical 指向错误域名，导致审核和收录信号混乱。
+- 100 有读者 > 1000 没人点：按来源页是否像有受众评，不按条数。无表 → `Unknown`。
+- 高信任域 + 主题相关页最强：符合 → 有表才可偏正；目录/农场 → `Fail`。
+- Spam 大负向（即使谷歌口头说会忽略）→ 垃圾主导 `Fail`。
+- EM 锚看占比不看条数；过浓 → P2。
+- 高质量提及或抬 AI 可见度（Reuters 个例）→ 推断，`Unknown` 除非用户给 AI 引荐数据。不编倍数。
 
-P1：
+用户提供链接表时：
 
-- 游戏页只有 iframe，缺原创介绍、玩法说明、FAQ 和相关内容；
-- 工具页只有入口或营销口号，缺使用步骤、示例、限制、FAQ；
-- 首页、分类页、核心页正文很薄，只是封面图、卡片或按钮；
-- 整站视觉上像通用模板，没有与主打游戏/工具相关的风格；
-- 大量页面空白、占位、重复或自动生成痕迹明显。
+| 检查项 | 级别 | 怎么判 | 动作 |
+|---|---|---|---|
+| 信任域 + 主题相关 + 来源有访客 | — | 正向 | 保持；不要追求条数 |
+| 垃圾/无关/无人读的链 | P1/P2 | 负向 | 停购、拒垃圾、disavow 仅当用户数据支持 |
+| 精确匹配锚文本占比 | P2 | 双刃，看画像占比 | 提高品牌/描述性锚，不数次数 |
 
-P2：
+## F3 Content Quality（47.6%）
 
-- 缺 Blog/Guides/Tutorials 内容区；
-- 审核阶段原创文章少于 5 篇；
-- 分类页缺文字说明和关键词分组；
-- 长尾关键词没有页面映射；
-- GSC 中 5-20 名、有展示但低点击的查询没有被优化；
-- 内链没有把首页、分类页、游戏/工具页、文章串起来。
+专家实战（≠ 官方保证）→ 动作：一手/原创缺失 → `Fail`。廉价规模 AI → `Fail`。人工深编 AI + UGC 不要只因「像 AI」Fail。Goldilocks：纯共识复述或过专家向 → P2 观察。
 
-P3：
+| 检查项 | 挂入的旧项 | 级别 | 代码证据 | 修复 |
+|---|---|---|---|---|
+| 无一手/原创 | 内容薄 | P1/P2 | 只有套话或竞品同构 | 补 Original Research / First-Party Data / 独特限制 |
+| 规模化低质 AI / 薄壳 | 薄内容、占位 | P1 | 重复壳、占位、模型痕迹 | 停批量；留人工编审过的页 |
+| 关键信息只在图里 | 图片 SEO | P2 | 表格/步骤是图片 | 改成 HTML 文本 |
+| 假 schema/评论 | 结构化数据 | P1 | 无真实评价却有 AggregateRating | 删掉伪造 |
 
-- 视觉 polish 可增强：配色、字体、图片、首屏状态更贴合主题；
-- OG/Twitter 预览、favicon、manifest 等品牌信号不完整；
-- schema 可增强：WebSite、Organization、BreadcrumbList、Article/BlogPosting、FAQPage；
-- 文章 freshness、作者/更新时间、相关内容模块可增强；
-- 额外信任信号不足，例如关于团队、更新日志、联系方式、内容来源说明。
+准确性/新鲜度的外部验证 → `Unknown`。内部泄露同时记入本因素与横切。
 
-### 工具页 / SaaS 落地页
+## F4 Authority & Trust（36.5%）
 
-必查模块：
+专家实战（≠ 官方保证）→ 动作：被谈论/分享/提及无数据 → `Unknown`。过专家向伤害大众可见度 → P2 观察。品牌强可撑差站是线上推断，**不**用来放过 F8 P0。
 
-- Hero：主词、价值、工具入口；
-- How it works：至少 3 步；
-- Features：具体能力；
-- Use cases：按场景分组；
-- FAQ：真实问题；
-- Trust：证言、安全、隐私、品牌；
-- Related tools/pages：相关功能内链；
-- CTA：底部再次入口。
+| 检查项 | 级别 | 代码证据 | 修复 |
+|---|---|---|---|
+| YMYL 承诺/诊断/保证 | P1 | 主题 + 断言同现 | 改信息性说明或撤主题 |
+| 无身份/来源 | P2 | 无 About/作者/来源 | 补真实身份，不写假资质 |
+| 信任模块可增强 | P3 | 无更新说明 | 按需补充 |
 
-### 目录站 / 图片站 / Coloring pages 类站点
+信任强度、外部口碑 → `Unknown`。
 
-必查模块：
+## F5 Behavior / Click Signals（29.4%）
 
-- 首页 H1 承载主词；
-- H2 承载二级词；
-- H3 承载三级词；
-- 每个 H2/H3 有图片或条目预览；
-- 分类页和详情页互相链接；
-- 图片 alt 和文件名可读；
-- 分页、筛选、标签页 canonical 清晰。
+无 GSC：线上行为 `Unknown`。代码只处理 CTR 文案。
 
-### 博客 / 内容站
+专家实战（≠ 官方保证）→ 动作：Navboost 仍强，无 GSC 不 Pass。CTR 明显低于同 SERP 同类位置 → `Fail`（有比较才算）。Bounce 禁止当依据。Pogo-stick / Return to SERP 有证据才 `Fail`。
 
-必查模块：
+| 检查项 | 挂入的旧项 | 级别 | 说明 |
+|---|---|---|---|
+| 缺 meta description | 旧 P1 TDK | **P2** | CTR 杠杆，**不是已被证明的排名因子** |
+| title/description 不利于点击 | 旧长度 P3 | P3 | 与 F1 title 相关性分开 |
+| 真实 CTR / pogo-stick | — | — | 有 GSC 才评；bounce 不用 |
+| 同 SERP 点击天花板 | — | — | 有比较表且明显落后才 Fail |
 
-- 标题匹配搜索意图；
-- 首段快速回答问题；
-- 作者、更新时间、引用来源；
-- TOC、H2/H3、列表/表格；
-- 相关文章和支柱页内链；
-- Article/BlogPosting schema；
-- 旧内容更新策略。
+## F6 Brand Signals（27.0%）
 
-### 电商 / 产品页
+专家实战（≠ 官方保证）→ 动作：Branded search ≈ 新外链（专家说法），无品牌词数据 → `Unknown`。Ad spend 不作为 Pass/Fail。
 
-必查模块：
+| 检查项 | 级别 | 代码 | 线上 |
+|---|---|---|---|
+| 名称/域名/logo 实体不一致 | P2 | 可查 | — |
+| OG/favicon 不完整 | P3 | 可查 | — |
+| 品牌词量、声誉 | — | 无 | `Unknown` |
+| 广告花费 | — | 不作为动作 | 几乎无直接排名作用 |
 
-- 产品/分类唯一 title、description、H1；
-- 分类页有独特文本，不只是商品网格；
-- Faceted navigation 的 canonical/noindex/robots 策略清晰；
-- Product schema 只使用真实价格、库存、评分；
-- 缺货产品策略明确；
-- 面包屑和分类内链清晰。
+## F7 User Satisfaction（19.8%）
+
+专家实战（≠ 官方保证）→ 动作：按页面类型建任务完成代理。UX 通过行为影响排名：挡任务 → Fail。Bounce 不用。
+
+| 检查项 | 挂入的旧项 | 级别 | 代码证据 |
+|---|---|---|---|
+| 首屏无法完成任务 | 工具/游戏薄壳 | P1 | 无入口、纯 iframe、只有口号 |
+| 任务路径含糊 | 落地页模块 | P2 | 有文案无动作 |
+| 真实满意度 | — | — | `Unknown`；不用 bounce |
+
+## F8 Technical SEO Health（17.5%）
+
+Table stakes：坏了能摔，好了不抬内容。CWV 不当 P1。
+
+专家实战（≠ 官方保证）→ 动作：商品化——Pass 不等于会赢。canonical 指错 → Fail；只写「曾有立即恢复」，不编幅度。机器理解：无初始 HTML 正文 → Fail。Speed/CWV 高估：超时/打不开才硬 Fail；大电商慢模板可 P2 观察。
+
+| 检查项 | 挂入的旧项 | 级别 | 代码证据 | 修复 |
+|---|---|---|---|---|
+| 核心页 noindex | 抓取 | P0 | robots meta noindex | 去掉或按类型条件化 |
+| robots 误封全站 | 抓取 | P0 | `Disallow: /` | 生产环境放行 |
+| 纯 CSR 无正文 | SSR | P0 | 只有 root + script | SSR/SSG/prerender |
+| canonical 错域名/死链 | canonical | P0 | staging/localhost | 生产 HTTPS 绝对 URL |
+| 动态页同一 HTML | 渲染 | P0/P1 | 所有 slug 同一 title/正文 | 按数据生成 |
+| sitemap/robots 测试域 | 抓取 | P0 | localhost URL | 统一 host |
+| 缺 canonical / 多个 canonical / 非绝对 | canonical | P1 | link rel | 每页一个绝对 HTTPS |
+| sitemap 缺失或域名错 | sitemap | P1 | 无入口或 host 错 | 只列 canonical |
+| 缺 viewport | 移动 | P2 | 无 viewport | 补上 |
+| 图片无尺寸、未压缩 | 性能 | P3 | 无 width/height | 组件+压缩；不当增长项 |
+| robots 未声明 sitemap | robots | P3 | 无 Sitemap 行 | 补地址 |
+| OG 与 canonical 冲突 | head | P3 | og:url ≠ canonical | 对齐 |
+
+框架专项（Next metadata、SPA prerender、Nuxt useHead、构建 HTML）全部是 F8 子项。真实收录、CWV 数字 → `Unknown` 除非用户提供。
+
+## F9 Topical Authority（14.3%）
+
+专家实战（≠ 官方保证）→ 动作：结构集群是代理。孤立页 → Fail。权威强度 Unknown。同构套话集群不装 Pass。
+
+| 检查项 | 挂入的旧项 | 级别 | 代码证据 |
+|---|---|---|---|
+| 无支柱+集群 | 关键词层级、分门别类 | P2 | 只有孤立页 |
+| 目录站主题未分层 | H2/H3 目录策略 | P2 | 首页不映射二级/三级主题 |
+| 权威强度 | — | — | `Unknown`，不打分 |
+
+## F10 Internal Links（11.1%）
+
+专家实战（≠ 官方保证）→ 动作：好内链 ≈ 很好的外链（量级说法，不编分）。全站可控：equity / 重要页 / 主题连接。孤儿 → Fail。必须写出来源→锚→目标。
+
+| 检查项 | 挂入的旧项 | 级别 | 代码证据 | 修复 |
+|---|---|---|---|---|
+| 重要页孤儿 | 内链 | P1 | sitemap 有、站内无入口 | 从支柱/分类链入 |
+| 内链过少、层级断 | 内链 | P2 | 正文几乎无内链 | 上→下、下→上、相关 |
+| 泛锚文本 | 内链 | P3 | click here | 描述目标主题 |
+
+## 横切：YMYL / 内部泄露
+
+默认扫描。YMYL 承诺 → P1，证据同时可挂 F4。内部/prompt/思考过程 → P1，证据同时可挂 F3。
+
+## 页面类型 → 因素映射（不再当主目录）
+
+| 站点类型 | 主要落到 |
+|---|---|
+| 工具 / SaaS | F1 任务形态 + F7 首屏完成 + F3 一手说明 |
+| 目录 / coloring pages | F9 分层 + F1 形态 + F10 分类↔详情 |
+| 博客 | F1 意图 + F3 原创/来源 + F9 支柱 |
+| 电商 | F1 产品意图 + F8 分面 canonical + F3 独特分类文本 |
+| 游戏 / 工具 AdSense | 独立 ADS-* 章；薄壳同时打 F3/F7 |
+
+## AdSense 审核专项（独立，不并入 Top 10 主表）
+
+核心问题：值不值得展示广告，还是低质套壳。完整 73 项见 `adsense-requirements.md`。
+
+P0：不可访问、4xx/5xx、robots/noindex 阻断、缺 Contact/Privacy/Terms、政策红线、canonical/sitemap 错域。
+
+P1：纯 iframe、工具只有入口、核心页很薄、通用模板、批量占位。
+
+P2：缺 Blog/Guides、原创不足 5 篇、分类无说明、长尾无页面、有 GSC 时 5–20 名低点击查询未处理、内链未串起来。
+
+P3：视觉 polish、OG、真实 schema、freshness、额外信任信号。
