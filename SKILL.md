@@ -1,6 +1,6 @@
 ---
 name: seo-code-diagnostic
-description: "Audit a website codebase for SEO and AdSense approval readiness: on-page SEO, technical SEO, crawlability, SSR/prerendering, TDK, headings, canonical URLs, internal links, image SEO, sitemap/robots, structured data, keyword-to-page content gaps, YMYL copy risk, internal/prompt/model-thinking copy leaks, AdSense review rejection, low value content, policy readiness, full ADS-* checklist audits with Pass/Fail/Unknown/N/A, game/tool site thin-shell risks, and Chinese diagnosis/code fix plans."
+description: "Audit a website codebase for SEO and AdSense approval readiness: crawlability, search-intent match, content quality (first-party/original), technical table stakes, TDK (title relevance vs title/description CTR; meta description is a CTR lever, not a proven ranking factor), headings, canonical URLs, internal links, image SEO, sitemap/robots, structured data, keyword-to-page gaps (density flags stuffing only; never flag density-too-low), YMYL copy risk, internal/prompt/model-thinking copy leaks, AdSense review rejection, low value content, policy readiness, full ADS-* checklist audits with Pass/Fail/Unknown/N/A, game/tool site thin-shell risks, and Chinese diagnosis/code fix plans. Codebase audit only: do not invent GSC/Ahrefs/backlink/CTR metrics."
 ---
 
 # SEO Code Diagnostic Skill
@@ -17,12 +17,30 @@ description: "Audit a website codebase for SEO and AdSense approval readiness: o
 
 SEO 的第一性原理：搜索引擎和 AI crawler 需要先能访问页面，再能理解页面，再能判断页面是否比竞品更好地满足搜索意图。
 
-审计时始终围绕四件事判断：
+**专家共识 ≠ Google 官方权重。** 2026 年 Zyppy 专家调研（Cyrus/Dawn Shepard，131 位 SEO，2026-09-09）把 Relevance、Backlinks、Content Quality 列为 Top 3；技术 SEO 是 table stakes：差会输，好也抬不起平庸内容。详见 `references/zyppy-2026-ranking-factors.md`。本 skill 仍然是代码仓库审计，不是 Ahrefs / GSC 替代品。没有用户提供的数据时，对应信号必须标 `Unknown`，禁止编造指标。
+
+审计时按「代码能证明 / 代码可推断 / 必须线上验证」三层判断：
+
+**A. 代码能证明（技术底座 + 页面可见结构）**
 
 1. **能不能抓到**：robots、noindex、HTTP 状态、sitemap、内部链接、页面是否依赖纯前端渲染。
-2. **能不能读懂**：title、description、canonical、H1/H2/H3、正文、图片 alt、结构化数据、语义化 HTML。
-3. **是否讲透关键词**：一个核心关键词对应一个明确页面；页面要覆盖用户围绕这个词会关心的主要问题，而不是机械重复关键词。
-4. **站内权重如何流动**：首页、分类页、子分类页、详情页之间要有清晰层级和上下级内链；重要页面要有上下文内链指向。
+2. **能不能读懂**：title（主题相关性）、canonical、H1/H2/H3、正文、图片 alt、结构化数据、语义化 HTML。
+3. **站内权重如何流动**：首页、分类页、子分类页、详情页之间要有清晰层级和上下级内链。内链是站点可端到端控制的杠杆。
+
+**B. 代码可推断（不要假装能量化排名）**
+
+4. **搜索意图匹配（相关性第 1）**：页面是否满足用户想要的结果类型/任务，而不只是出现关键词。很多页都已匹配意图时，还要看信息增益：有没有竞品没有的一手数据、方法或独特解释。
+5. **内容质量**：是否有原创研究、一手数据、独特示例或真实 UGC。规模化低质 AI 标负面风险；高质量 AI + 人工编辑 + 独特/UGC 可以接受。不要打「质量分」。
+6. **主题权威（结构代理）**：是否形成支柱页 + 集群，而不是孤立薄页。这只是结构代理，不是主题权威分数。
+7. **标题相关性 vs 标题/描述点击**：title 是否匹配意图（相关性）；title 和 meta description 是否利于 SERP 点击（CTR）。meta description **不是已被证明的排名因子**，按 CTR 杠杆处理（P2/P3），不要写成排名 P1。
+
+**C. 无数据必须 Unknown（禁止编造）**
+
+8. **行为 / 点击信号**：满意度/任务完成最重要；Return to SERP / pogo-stick 为负向。跳出率是差代理。没有 GSC 就标 Unknown。
+9. **品牌 / 信任**：线上口碑、品牌词搜索量。广告花费几乎无直接排名作用。代码里只能看信任模块是否存在。
+10. **外链质量**：来自受信任域名、主题相关、且该来源页有真实访问的链接。垃圾链强负向。精确匹配锚文本利弊取决于它在锚文本画像中的占比。没有 Ahrefs/GSC/链接表就标 Unknown，不要用外链数量当目标。
+
+技术 SEO 是 table stakes，不是增长解锁：先保证能抓、能索引、能读到 HTML；不要指望 CWV/速度把平庸内容做上去（CWV 存在争议且常被高估）。
 
 ## 输入处理
 
@@ -35,7 +53,7 @@ SEO 的第一性原理：搜索引擎和 AI crawler 需要先能访问页面，�
 - 是否允许运行构建命令、测试命令或只做静态代码审计。
 - 如果是 AdSense 审核：收集拒绝原因原文/截图、AdSense 后台提示、目标站点类型、是否游戏/工具 iframe、GSC 收录页面、GSC 查询、近 28/90 天流量、是否有游戏/素材授权和政策敏感内容。
 
-如果用户没有提供关键词，先从域名、路由、页面标题、README、产品文案中推断候选关键词，并在报告中标注“待确认”。不要因为缺关键词就停止审计；先做技术和结构层面的诊断。
+如果用户没有提供关键词，先从域名、路由、页面标题、README、产品文案中推断候选关键词，并在报告中标注“待确认”。不要因为缺关键词就停止审计；先做技术和结构层面的诊断。如果用户没有提供 GSC / Ahrefs / 外链 / 品牌数据，行为、CTR、品牌强度、外链质量必须标 `Unknown`，不要编造。
 
 ## 标准工作流
 
@@ -66,7 +84,7 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
   --out seo-audit
 ```
 
-脚本会生成 `seo-audit.json` 和 `seo-audit.md`。把脚本结果当作证据，不要把它当作完整结论；你还需要人工检查框架层面的 SSR/SSG、动态 metadata、页面组件复用、内链策略和内容缺口。
+脚本会生成 `seo-audit.json` 和 `seo-audit.md`。把脚本结果当作证据，不要把它当作完整结论；你还需要人工检查框架层面的 SSR/SSG、动态 metadata、页面组件复用、内链策略、搜索意图匹配和内容缺口。判断优先级时对照 `references/zyppy-2026-ranking-factors.md`：技术问题按 table stakes 处理，description 按 CTR 处理，密度只看堆砌。
 
 如果用户要求 AdSense 审核诊断，添加 `--adsense`：
 
@@ -93,11 +111,14 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
 
 #### TDK 与 head
 
-- 每个可索引页面有唯一、准确、吸引点击的 `<title>`。
-- 每个核心页面有有用的 `meta description`；不要依赖关键词堆叠。
+把 title / description 拆成两件事，不要混成「TDK 都是排名信号」：
+
+- **标题相关性（on-page 相关性）**：每个可索引页面有唯一、准确的 `<title>`，直接表达本页要满足的搜索意图/任务，而不是堆词。
+- **标题/描述点击（CTR 杠杆）**：title 和 meta description 是否在 SERP 上说清价值、吸引点击。这是点击文案，不是第二套关键词密度。
+- 每个核心页面建议有有用的 `meta description`，按 **P2/P3 CTR 杠杆**处理，**不要按 P1 排名关键项处理**。专家共识认为它对排名几乎没有/没有影响；它仍可能影响 SERP CTR。不要依赖关键词堆叠。明确写：**不是已被证明的排名因子**。
 - 一般不需要 `meta keywords`；发现时可建议删除或不维护。
 - 每个核心页面有唯一 canonical，canonical 用绝对 URL、HTTPS、正确域名，并且每页只出现一次。
-- `og:url` 与 canonical 不冲突；Open Graph/Twitter meta 对分享有价值，但优先级低于 title/description/canonical。
+- `og:url` 与 canonical 不冲突；Open Graph/Twitter meta 对分享有价值，但优先级低于 title 相关性、canonical 和正文。
 
 #### 页面语义结构
 
@@ -114,15 +135,16 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
 2. How it works：围绕主用户任务解释步骤。
 3. Features：具体能力，不是空泛形容词。
 4. 示例/场景/用例：解释不同搜索意图。
-5. FAQ：回答真实问题，答案要有信息增益。
-6. 用户证言、评分、案例、品牌/安全/隐私信任信号。
+5. FAQ：回答真实问题，答案要有信息增益（竞品没写清的限制、数据、反例或一手经验）。
+6. 用户证言、评分、案例、品牌/安全/隐私信任信号。只使用真实评价；不要伪造 schema/评论。
 7. 相关功能/相关关键词页面链接列表。
 8. 页面尾部再次给工具入口或 CTA。
 
-#### 关键词与内容覆盖
+#### 关键词、意图与内容覆盖
 
 - 首页主关键词、二级关键词、三级关键词要有页面映射：主词通常用首页或支柱页；二级词用一级子目录；三级词用二级子目录或详情页。
-- 关键词密度只作为辅助信号：经验参考范围是 3%–5%，不要超过 8%；但不要为了密度牺牲自然表达。低于目标时优先补充同义词、实体、场景、FAQ 和相关问题，而不是硬塞词。
+- **Search Intent Match 优先于字面关键词**：先满足用户要的结果类型/任务。很多页都匹配意图时，再检查信息增益（一手数据、原创方法、独特示例/UGC）。
+- **不要把关键词密度当作诊断或优化目标。** 不要追求 3%–5%，也不要把 8% 当成「达标上限」。密度只用于发现异常堆砌（异常高才标）；**不要**因为「密度太低」而报警或要求补密度。覆盖不足时，优先检查意图、同义词、实体、场景、FAQ，而不是硬塞词。
 - 一个页面不要同时竞争多个完全不同的搜索意图；必要时拆页。
 - 用语义相关词围绕主词解释，例如 “remove background” 页面可自然覆盖 upload image、transparent background、PNG、AI background remover、photo editor、erase background、download result 等。
 
@@ -222,10 +244,10 @@ AdSense 审核不是只查当前看起来可疑的项目。必须逐项覆盖 `a
 
 ### 6. 严重级别
 
-- **P0 阻断型**：noindex/robots 误封、重要页面无法生成 HTML、核心页面 4xx/5xx、canonical 指向错误域名或死链、纯 CSR 导致几乎无可读内容。
-- **P1 高影响**：缺 title/description/H1/canonical、多个 H1、动态页复用同一 TDK、重要页面孤儿、sitemap 缺核心 URL、结构严重混乱、YMYL 承诺型文案、内部/prompt/模型思考痕迹出现在用户文案中。
-- **P2 中影响**：内容薄、搜索意图覆盖不足、内链层级不清、图片 alt 缺失、FAQ/相关页模块缺失、关键词页面映射不清。
-- **P3 优化项**：标题过长/过短、OG/Twitter 不完整、schema 可增强、图片文件名可优化、段落可读性改进。
+- **P0 阻断型**：noindex/robots 误封、重要页面无法生成 HTML、核心页面 4xx/5xx、canonical 指向错误域名或死链、纯 CSR 导致几乎无可读内容。这些是 table stakes 的「会输」一侧，不是增长项。
+- **P1 高影响**：缺 title/H1/canonical、多个 H1、动态页复用同一 title/H1、重要页面孤儿、sitemap 缺核心 URL、结构严重混乱、YMYL 承诺型文案、内部/prompt/模型思考痕迹出现在用户文案中、页面明显答非所问（意图错配）。**缺 meta description 不是 P1。**
+- **P2 中影响**：内容薄、搜索意图覆盖不足、缺原创/一手信息、内链层级不清、图片 alt 缺失、FAQ/相关页模块缺失、关键词页面映射不清、标题与意图明显偏离、**缺 meta description（CTR 杠杆，不是排名因子）**。
+- **P3 优化项**：标题过长/过短或不利于点击、description 长度/吸引力、OG/Twitter 不完整、schema 可增强、图片文件名可优化、段落可读性改进。不要把 CWV 当 P1。
 
 AdSense 分支中：
 
@@ -252,10 +274,16 @@ AdSense 分支中：
 | 优先级 | 页面/文件 | 证据 | 为什么影响 SEO | 建议修复 | 代码位置 |
 
 ## 关键词与页面映射
-| 关键词 | 搜索意图 | 建议 URL | 当前页面 | 缺口 | 建议动作 |
+| 关键词 | 搜索意图（结果类型/任务） | 建议 URL | 当前页面 | 意图/信息增益缺口 | 建议动作 |
+
+## 标题相关性 vs 标题/描述 CTR
+| 页面 | title 是否匹配意图 | title/description 是否利于点击 | 说明 |
+|---|---|---|---|
+
+缺 description 按 P2/P3 CTR 处理，并写明「不是已被证明的排名因子」。
 
 ## 页面结构与内容缺口
-| 页面 | H1 | H2/H3 覆盖 | 缺失模块 | 建议补充 |
+| 页面 | H1 | H2/H3 覆盖 | 缺失模块 | 一手/原创信息 | 建议补充 |
 
 ## 文案风险审计
 | 优先级 | 页面/文件 | 风险类型 | 原文证据 | 为什么有风险 | 用户语言改写方向 |
@@ -263,8 +291,9 @@ AdSense 分支中：
 ## 内链结构建议
 | 来源页 | 锚文本 | 目标页 | 原因 |
 
-## 技术 SEO 检查
-- robots / sitemap / canonical / SSR / schema / image / performance
+## 技术 SEO 检查（table stakes，不是增长解锁）
+- robots / sitemap / canonical / SSR / schema / image
+- 差会阻断；好也抬不起平庸内容。CWV 不作为 P1。
 
 ## AdSense 审核诊断（如果用户要求）
 | ADS ID | 优先级 | 状态 | 证据 | 建议 |
@@ -283,14 +312,23 @@ AdSense 分支中：
 ## 需要用户补充的数据（如果用户要求）
 - AdSense 拒绝原因 / GSC 收录 / GSC 查询 / 流量 / 授权信息
 
+## 线上才能验证（代码无法证明，禁止编造）
+| 信号 | 代码侧能说什么 | 需要的线上证据 | 状态 |
+|---|---|---|---|
+| GSC 点击质量 / CTR | title/description 是否像 CTR 文案 | GSC 展示、点击、CTR、查询与着陆页是否匹配 | Unknown / 用户提供 |
+| 任务完成 / 满意度 | 页面是否像能完成该任务 | 用户研究、回访、GSC 查询满意度；不要用 bounce rate | Unknown / 用户提供 |
+| 品牌查询与口碑 | 是否有 About/作者/来源等信任模块 | 品牌词搜索、评价、提及 | Unknown / 用户提供 |
+| 外链质量 | 无 | 来自受信任、主题相关、有真实访问的页面的链接；不是链接数量 | Unknown / 用户提供 |
+| 主题权威强度 | 是否有支柱+集群结构 | 该主题下的可见性/提及（需用户数据） | Unknown / 用户提供 |
+
 ## 可执行修复清单
 1. ...
 2. ...
 
 ## 验证方式
 - 本地 build/test 命令
-- 查看源代码要能看到 title、description、H1、正文、canonical
-- 提交 Google Search Console 后观察收录与前 20 名关键词变化
+- 查看源代码要能看到 title、H1、正文、canonical（description 按 CTR 检查，不按排名验收）
+- 有 GSC 时再验证：意图匹配、任务完成、点击质量、品牌查询、外链质量。没有这些数据就保持 Unknown。
 ```
 
 如果用户要求直接改代码，先列出最小修复方案，然后执行修改。修改后运行可用的 lint/build/test，并说明哪些验证已完成、哪些需要线上数据或 GSC/Ahrefs 才能验证。
@@ -298,8 +336,10 @@ AdSense 分支中：
 ## 不要做
 
 - 不要承诺“改完一定上首页”。
-- 不要伪造 Ahrefs、GSC、GA、排名、搜索量、外链数据。
-- 不要为了关键词密度把文案改成机械重复。
+- 不要伪造 Ahrefs、GSC、GA、排名、搜索量、CTR、品牌词量、外链数量或「权威分」。
+- 不要把关键词密度 3%–5%（或 8% 上限）当成优化目标；不要因为密度低而改文案或报警。
+- 不要把缺 meta description 写成 P1 排名问题。
+- 不要把技术 SEO / CWV 写成增长解锁。
 - 不要把 YMYL 主题写成未经证明的医疗、金融、法律或安全建议/承诺。
 - 不要把内部要求、prompt、模型思考过程、草稿说明或占位文案直接暴露给用户。
 - 不要把所有页面 canonical 到首页。

@@ -6,6 +6,10 @@ This script performs a deterministic, offline scan of a website codebase.
 It does not crawl the public web and does not replace a full browser render,
 Ahrefs Site Audit, Google Search Console, or PageSpeed Insights.
 
+Keyword density is a stuffing heuristic only: never treat 3%-5% (or an 8%
+cap) as an optimization target, and never flag "density too low".
+Missing meta description is a CTR lever (P2), not a proven ranking factor.
+
 Outputs:
   - <out>.json: structured findings
   - <out>.md: readable Chinese audit summary
@@ -70,6 +74,8 @@ COPY_REVIEW_SOURCE_EXTS = {".jsx", ".tsx", ".vue", ".svelte", ".astro", ".md", "
 MAX_READ_BYTES = 700_000
 
 SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+# Stuffing heuristic only. Not an optimization target or "healthy" ceiling.
+STUFFING_DENSITY_PERCENT = 8.0
 
 
 @dataclass
@@ -267,6 +273,7 @@ def token_count(text: str) -> int:
 
 
 def keyword_density(text: str, keyword: str) -> Dict[str, object]:
+    """Count keyword occurrences. density_percent is only for stuffing detection."""
     text_norm = normalize_ws(text).lower()
     keyword_norm = normalize_ws(keyword).lower()
     if not text_norm or not keyword_norm:
@@ -601,14 +608,21 @@ def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: Lis
         add_issue(issues, "P0", "NOINDEX", file_rel, f"robots meta = {robots}", "确认该页面是否真的不需要收录；核心 SEO 页面不要设置 noindex。")
 
     if not title:
-        add_issue(issues, "P1", "MISSING_TITLE", file_rel, "未找到 <title>", "为每个可索引页面设置唯一 title，包含主搜索意图并吸引点击。")
+        add_issue(issues, "P1", "MISSING_TITLE", file_rel, "未找到 <title>", "为每个可索引页面设置唯一 title，先匹配主搜索意图/任务，再考虑 SERP 点击文案。")
     elif len(title) < 15 or len(title) > 70:
-        add_issue(issues, "P3", "TITLE_LENGTH", file_rel, f"title 长度 {len(title)}: {title}", "检查标题是否过短、过长或会在搜索结果中被截断。")
+        add_issue(issues, "P3", "TITLE_LENGTH", file_rel, f"title 长度 {len(title)}: {title}", "这是 CTR/展示问题：检查标题是否过短、过长或会在搜索结果中被截断。相关性另看 title 是否表达本页任务。")
 
     if not description:
-        add_issue(issues, "P1", "MISSING_DESCRIPTION", file_rel, "未找到 meta description", "为核心页面添加能扩展 title、说明价值点并促进点击的 meta description。")
+        add_issue(
+            issues,
+            "P2",
+            "MISSING_DESCRIPTION",
+            file_rel,
+            "未找到 meta description（CTR 杠杆，不是已被证明的排名因子）",
+            "建议补充能说明价值并促进点击的 meta description。专家共识认为它对排名几乎没有/没有影响；按 P2/P3 CTR 处理，不要当成排名 P1。",
+        )
     elif len(description) < 50 or len(description) > 170:
-        add_issue(issues, "P3", "DESCRIPTION_LENGTH", file_rel, f"description 长度 {len(description)}", "检查描述是否过短、过长或缺少具体收益。")
+        add_issue(issues, "P3", "DESCRIPTION_LENGTH", file_rel, f"description 长度 {len(description)}", "CTR 文案问题：检查描述是否过短、过长或缺少具体收益。不是排名因子。")
 
     if parser.meta.get("keywords"):
         add_issue(issues, "P3", "META_KEYWORDS_PRESENT", file_rel, "发现 meta keywords", "通常不需要维护 meta keywords；优先优化 title、description、正文和内链。")
@@ -666,17 +680,29 @@ def audit_html_file(path: Path, root: Path, domain: Optional[str], keywords: Lis
     if text_chars > 1000 and not re.search(r"faq|frequently asked|常见问题|questions|问答", lower_headings, flags=re.I):
         add_issue(issues, "P3", "FAQ_MODULE_ABSENT", file_rel, "未发现明显 FAQ 标题", "如果页面承载关键词流量，可补充真实 FAQ，回答搜索者的常见问题。")
 
+    if title and keywords:
+        title_l = title.lower()
+        body_l = text.lower()
+        present_in_body = [kw for kw in keywords if normalize_ws(kw).lower() in body_l]
+        if present_in_body and not any(normalize_ws(kw).lower() in title_l for kw in present_in_body):
+            add_issue(
+                issues,
+                "P2",
+                "TITLE_INTENT_GAP",
+                file_rel,
+                f"正文覆盖了 {present_in_body[:3]}，但 title 未表达这些意图：{title}",
+                "先改 title 相关性，使它匹配本页任务；点击吸引力另算 CTR，不要为了密度改 title。",
+            )
+
     densities = [keyword_density(text, kw) for kw in keywords]
     for density in densities:
         kw = str(density["keyword"])
         pct = float(density["density_percent"])
         count = int(density["count"])
         if count == 0:
-            add_issue(issues, "P2", "KEYWORD_NOT_FOUND", file_rel, f"关键词 `{kw}` 在可见文本中未出现", "确认该关键词是否应映射到此页面；如果是，补充自然表达和相关语义内容。")
-        elif pct > 8:
-            add_issue(issues, "P2", "KEYWORD_DENSITY_HIGH", file_rel, f"`{kw}` 密度约 {pct}%", "降低机械重复，改用同义词、实体、示例和相关问题解释主词。")
-        elif 0 < pct < 1 and text_chars > 900:
-            add_issue(issues, "P3", "KEYWORD_DENSITY_LOW", file_rel, f"`{kw}` 密度约 {pct}%", "如果该页目标就是这个关键词，可在 H1/H2/首段/FAQ/内链锚文本中更自然地覆盖。")
+            add_issue(issues, "P2", "KEYWORD_NOT_FOUND", file_rel, f"关键词 `{kw}` 在可见文本中未出现", "确认该关键词是否应映射到此页面；如果是，按意图补充自然表达，不要用密度目标硬塞词。")
+        elif pct > STUFFING_DENSITY_PERCENT:
+            add_issue(issues, "P2", "KEYWORD_DENSITY_HIGH", file_rel, f"`{kw}` 密度约 {pct}%（堆砌启发式，不是优化上限）", "降低机械重复，改用同义词、实体、示例和相关问题解释主词。不要把密度压到某个百分比区间当目标。")
 
     return {
         "file": file_rel,
@@ -778,7 +804,7 @@ def audit_source_files(root: Path, source_files: List[Path]) -> Dict[str, object
             "NO_METADATA_SOURCE_FOUND",
             "repo",
             "未在路由/源码中发现明显 title/meta/metadata 设置",
-            "检查是否有统一 SEO 组件；动态页面应生成唯一 title、description、canonical。",
+            "检查是否有统一 SEO 组件；动态页面应生成唯一 title 和 canonical。description 按 CTR 补充，不当成排名 P1。",
         )
     if summary["route_files"] and not summary["canonical_mentions"]:
         add_issue(
@@ -1047,7 +1073,7 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
     if counts.get("P0"):
         lines.append(f"发现 {counts.get('P0')} 个 P0 阻断型问题，优先检查抓取/索引/渲染/canonical。")
     elif counts.get("P1"):
-        lines.append(f"未发现 P0，但有 {counts.get('P1')} 个 P1 高影响问题，优先修复 TDK、H1、canonical、sitemap 或 metadata。")
+        lines.append(f"未发现 P0，但有 {counts.get('P1')} 个 P1 高影响问题，优先修复 title、H1、canonical、sitemap 或可抓取的 HTML。缺 description 不是 P1。")
     elif issues:
         lines.append("未发现明显阻断型问题，主要优化空间在内容覆盖、内链、图片和结构化数据。")
     else:
@@ -1069,9 +1095,9 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
     lines.append("|---|---:|---|")
     meaning = {
         "P0": "阻断抓取、索引或核心 HTML 可见性的风险",
-        "P1": "高影响 on-page/technical SEO 问题",
-        "P2": "内容、内链、语义、图片等中影响问题",
-        "P3": "增强项和细节优化",
+        "P1": "高影响：title/H1/canonical/sitemap/意图错配等（缺 description 不是 P1）",
+        "P2": "内容、意图、内链、CTR 文案（含缺 description）、图片等中影响问题",
+        "P3": "CTR 细节、OG、schema 等增强项；不是增长解锁",
     }
     for sev in ["P0", "P1", "P2", "P3"]:
         lines.append(f"| {sev} | {counts.get(sev, 0)} | {meaning[sev]} |")
@@ -1102,10 +1128,10 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
         lines.append("")
 
     if result.get("keywords") and html_pages:
-        lines.append("## 关键词密度辅助检查")
-        lines.append("关键词密度不是目标本身，只用来发现“完全没覆盖”或“机械堆砌”。")
+        lines.append("## 关键词覆盖与堆砌检查")
+        lines.append("密度**不是**优化目标，也不存在 3%–5% 或 8% 达标区间。脚本只在目标词未出现或密度异常高（堆砌启发式）时报警，**不会**因为密度低报警。")
         lines.append("")
-        lines.append("| 文件 | 关键词 | 出现次数 | 估算密度 |")
+        lines.append("| 文件 | 关键词 | 出现次数 | 估算密度（仅供堆砌判断） |")
         lines.append("|---|---|---:|---:|")
         for page in html_pages[:80]:
             for kd in page.get("keyword_density", []):
@@ -1137,12 +1163,25 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
     if result.get("adsense_audit"):
         write_adsense_markdown(lines, result.get("adsense_audit", {}))
 
+    lines.append("## 线上才能验证的信号")
+    lines.append("本脚本是代码审计，不是 GSC/Ahrefs 替代品。下列信号没有用户提供的数据时必须标 Unknown，禁止编造数字。")
+    lines.append("")
+    lines.append("| 信号 | 代码侧能说什么 | 需要的线上证据 | 默认状态 |")
+    lines.append("|---|---|---|---|")
+    lines.append("| GSC 点击质量 / CTR | title/description 是否像 CTR 文案；缺 description 是 CTR 杠杆，不是排名因子 | GSC 展示、点击、CTR、查询与着陆页是否匹配 | Unknown |")
+    lines.append("| 任务完成 / 满意度 | 页面模块是否像能完成该任务 | 用户研究、回访、GSC 查询满意度；不要用 bounce rate | Unknown |")
+    lines.append("| 品牌查询与口碑 | 是否有 About/作者/来源等信任模块 | 品牌词搜索、评价、提及 | Unknown |")
+    lines.append("| 外链质量 | 无 | 来自受信任、主题相关、有真实访问的页面的链接；不是链接数量 | Unknown |")
+    lines.append("| 主题权威强度 | 是否有支柱+集群结构 | 该主题下的可见性/提及 | Unknown |")
+    lines.append("")
+
     lines.append("## 建议下一步")
-    lines.append("1. 先修 P0/P1：抓取、索引、SSR/SSG、title、description、H1、canonical、sitemap。")
-    lines.append("2. 再做关键词-页面映射：确认首页、二级目录、三级目录、详情页分别承载哪些词。")
+    lines.append("1. 先修 P0/P1 table stakes：抓取、索引、SSR/SSG、title 相关性、H1、canonical、sitemap。好的技术不会抬起平庸内容。")
+    lines.append("2. 再做意图-页面映射：每个 URL 满足哪一种结果类型/任务；很多页都匹配时补一手/原创信息增益。")
     lines.append("3. 对核心落地页补齐模块：工具入口、How it works、Features、场景、FAQ、证言、相关链接、CTA。")
-    lines.append("4. 加强内链：上级页链接下级页，下级页用明确锚文本链接回上级页，所有核心页自然链接到首页或支柱页。")
-    lines.append("5. 构建后查看网页源代码，确认核心文案、TDK、H1/H2/H3、canonical、JSON-LD 都在 HTML 中可见。")
+    lines.append("4. 加强内链（可控制杠杆）：上级页链接下级页，下级页用明确锚文本链接回上级页。")
+    lines.append("5. 标题/描述 CTR 与缺 description 按 P2/P3 处理，不要写成排名 P1。")
+    lines.append("6. 构建后查看网页源代码，确认核心文案、title、H1/H2/H3、canonical、JSON-LD 都在 HTML 中可见。")
     lines.append("")
 
     output_path.write_text("\n".join(lines), encoding="utf-8")
@@ -1155,7 +1194,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Offline static SEO code audit helper.")
     parser.add_argument("--root", default=".", help="Repository/site root to scan.")
     parser.add_argument("--domain", default="", help="Canonical production domain, e.g. https://example.com")
-    parser.add_argument("--keywords", default="", help="Comma-separated target keywords for density checks.")
+    parser.add_argument("--keywords", default="", help="Comma-separated target keywords for coverage and stuffing checks (not a density target).")
     parser.add_argument("--adsense", action="store_true", help="Add AdSense approval-readiness checks for game/tool/content sites.")
     parser.add_argument("--out", default="seo-audit", help="Output prefix, without extension.")
     args = parser.parse_args(argv)
