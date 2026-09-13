@@ -6,9 +6,10 @@ This script performs a deterministic, offline scan of a website codebase.
 It does not crawl the public web and does not replace a full browser render,
 Ahrefs Site Audit, Google Search Console, or PageSpeed Insights.
 
+Reports are organized by the 2026 Zyppy Top 10 ranking factors (F1-F10).
 Keyword density is a stuffing heuristic only: never treat 3%-5% (or an 8%
 cap) as an optimization target, and never flag "density too low".
-Missing meta description is a CTR lever (P2), not a proven ranking factor.
+Missing meta description is a CTR lever (P2) under F5, not a ranking F1 item.
 
 Outputs:
   - <out>.json: structured findings
@@ -76,6 +77,88 @@ MAX_READ_BYTES = 700_000
 SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 # Stuffing heuristic only. Not an optimization target or "healthy" ceiling.
 STUFFING_DENSITY_PERCENT = 8.0
+
+# 2026 Zyppy Top 10. mode: code = can Pass from repo; online = always Unknown
+# without user data; hybrid = Fail if code issues else Unknown (never Pass).
+RANKING_FACTORS: List[Dict[str, str]] = [
+    {"id": "F1", "name": "Relevance / Search Intent Match", "share": "57.1%", "mode": "code"},
+    {"id": "F2", "name": "Backlinks", "share": "54.8%", "mode": "online"},
+    {"id": "F3", "name": "Content Quality", "share": "47.6%", "mode": "code"},
+    {"id": "F4", "name": "Authority & Trust", "share": "36.5%", "mode": "hybrid"},
+    {"id": "F5", "name": "Behavior / Click Signals", "share": "29.4%", "mode": "hybrid"},
+    {"id": "F6", "name": "Brand Signals", "share": "27.0%", "mode": "hybrid"},
+    {"id": "F7", "name": "User Satisfaction", "share": "19.8%", "mode": "hybrid"},
+    {"id": "F8", "name": "Technical SEO Health", "share": "17.5%", "mode": "code"},
+    {"id": "F9", "name": "Topical Authority", "share": "14.3%", "mode": "hybrid"},
+    {"id": "F10", "name": "Internal Links", "share": "11.1%", "mode": "code"},
+]
+
+ISSUE_TO_FACTOR = {
+    "MISSING_TITLE": "F1",
+    "TITLE_INTENT_GAP": "F1",
+    "MISSING_H1": "F1",
+    "MULTIPLE_H1": "F1",
+    "HEADING_SKIP": "F1",
+    "KEYWORD_NOT_FOUND": "F1",
+    "KEYWORD_DENSITY_HIGH": "F1",
+    "FAQ_MODULE_ABSENT": "F1",
+    "THIN_CONTENT": "F3",
+    "INTERNAL_COPY_LEAK": "F3",
+    "YMYL_COPY_REVIEW": "F4",
+    "MISSING_DESCRIPTION": "F5",
+    "DESCRIPTION_LENGTH": "F5",
+    "TITLE_LENGTH": "F5",
+    "NOINDEX": "F8",
+    "ROBOTS_MISSING": "F8",
+    "ROBOTS_DISALLOW_ALL": "F8",
+    "ROBOTS_NO_SITEMAP": "F8",
+    "SITEMAP_MISSING": "F8",
+    "SITEMAP_EMPTY": "F8",
+    "SITEMAP_DOMAIN_MISMATCH": "F8",
+    "MISSING_CANONICAL": "F8",
+    "MULTIPLE_CANONICAL": "F8",
+    "CANONICAL_NOT_ABSOLUTE": "F8",
+    "CANONICAL_DOMAIN_MISMATCH": "F8",
+    "CANONICAL_NOT_HTTPS": "F8",
+    "CSR_OR_THIN_HTML_RISK": "F8",
+    "MISSING_VIEWPORT": "F8",
+    "NEXT_PAGE_USE_CLIENT": "F8",
+    "NO_METADATA_SOURCE_FOUND": "F8",
+    "NO_CANONICAL_SOURCE_FOUND": "F8",
+    "NO_SCHEMA_SOURCE_FOUND": "F8",
+    "OG_URL_CANONICAL_MISMATCH": "F8",
+    "META_KEYWORDS_PRESENT": "F8",
+    "IMAGE_DIMENSIONS_MISSING": "F8",
+    "IMAGE_ALT_MISSING": "F3",
+    "SOURCE_IMG_WITHOUT_ALT": "F3",
+    "LOW_INTERNAL_LINKS": "F10",
+}
+
+FACTOR_ONLINE = {
+    "F1": "竞品 SERP / 真实意图满足度常 Unknown",
+    "F2": "信任域、主题相关、真实访客、垃圾链、EM 锚占比；无链接表则 Unknown",
+    "F3": "外部准确性/新鲜度 Unknown；不打质量分",
+    "F4": "信任强度 / 外部口碑 Unknown",
+    "F5": "无 GSC 则 CTR/pogo-stick Unknown；bounce 不用",
+    "F6": "品牌词量/声誉 Unknown；广告花费几乎无直接作用",
+    "F7": "真实任务完成/满意度 Unknown",
+    "F8": "真实收录/CWV 常 Unknown；table stakes，不是增长解锁",
+    "F9": "主题权威强度 Unknown；结构只是代理",
+    "F10": "不计算内链权重分",
+}
+
+FACTOR_DEFAULT_ACTION = {
+    "F1": "按结果形态/任务改 title、H1 和正文；不要补密度。",
+    "F2": "没有链接表就保持 Unknown；有表则评信任域+主题+真实访客，不追求数量。",
+    "F3": "补一手/原创信息；停掉规模化低质 AI 薄壳。",
+    "F4": "补真实身份/来源；YMYL 改成信息性说明。强度保持 Unknown。",
+    "F5": "description 按 CTR 处理，不是排名 P1。有 GSC 再评点击质量。",
+    "F6": "对齐名称/域名/组织实体。不要把广告花费当排名动作。",
+    "F7": "让工具/游戏首屏能完成任务。满意度无数据则 Unknown。",
+    "F8": "先修会摔的抓取/SSR/canonical/sitemap。修好不会抬起平庸内容。",
+    "F9": "用支柱+集群做结构代理，不打权威分。",
+    "F10": "补具体来源页→锚文本→目标页，避免重要页孤儿。",
+}
 
 
 @dataclass
@@ -876,8 +959,60 @@ def collect_issues(result: Dict[str, object]) -> List[Dict[str, str]]:
         issues.extend(page.get("issues", []))
     issues.extend(result.get("source_audit", {}).get("issues", []))
     issues.extend(result.get("repo_audit", {}).get("issues", []))
+    for issue in issues:
+        issue["factor"] = ISSUE_TO_FACTOR.get(str(issue.get("code", "")), "")
     issues.sort(key=lambda x: (SEVERITY_ORDER.get(x.get("severity", "P3"), 9), x.get("file", ""), x.get("code", "")))
     return issues
+
+
+def build_factor_summary(result: Dict[str, object]) -> List[Dict[str, object]]:
+    issues = collect_issues(result)
+    by_factor: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    for issue in issues:
+        fid = str(issue.get("factor") or "")
+        if fid:
+            by_factor[fid].append(issue)
+
+    has_html = bool(result.get("html_pages"))
+    rows: List[Dict[str, object]] = []
+    for spec in RANKING_FACTORS:
+        fid = spec["id"]
+        factor_issues = by_factor.get(fid, [])
+        mode = spec["mode"]
+        if factor_issues:
+            status = "Fail"
+            preview = "; ".join(
+                f"{item.get('severity')} {item.get('code')} @ {item.get('file')}" for item in factor_issues[:4]
+            )
+            if len(factor_issues) > 4:
+                preview += f" …共 {len(factor_issues)} 条"
+            action = str(factor_issues[0].get("recommendation") or FACTOR_DEFAULT_ACTION[fid])
+        elif mode == "code":
+            if fid in {"F1", "F3", "F10"} and not has_html:
+                status = "Unknown"
+                preview = "没有可解析的 HTML 页面，无法从代码证明该因素"
+            else:
+                status = "Pass"
+                preview = "静态扫描未见该因素的代码问题；不是线上排名证明"
+            action = FACTOR_DEFAULT_ACTION[fid]
+        else:
+            status = "Unknown"
+            preview = "代码无法证明该因素的线上强度；禁止编造指标"
+            action = FACTOR_DEFAULT_ACTION[fid]
+        rows.append(
+            {
+                "id": fid,
+                "name": spec["name"],
+                "share": spec["share"],
+                "mode": mode,
+                "status": status,
+                "evidence": preview,
+                "online_signal": FACTOR_ONLINE[fid],
+                "action": action,
+                "issue_count": len(factor_issues),
+            }
+        )
+    return rows
 
 
 def audit_adsense_readiness(result: Dict[str, object], root: Path, all_files: List[Path]) -> Dict[str, object]:
@@ -1057,9 +1192,12 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
     counts = Counter(issue.get("severity", "P3") for issue in issues)
     html_pages = result.get("html_pages", [])
     project = result.get("project", {})
+    factors = result.get("factor_summary") or build_factor_summary(result)
 
     lines: List[str] = []
     lines.append("# SEO 代码静态诊断报告")
+    lines.append("")
+    lines.append("主骨架是 2026 Zyppy Top 10。专家共识 ≠ Google 官方权重。本报告是代码审计，不是 GSC/Ahrefs 替代品。")
     lines.append("")
     lines.append(f"生成时间：{result.get('generated_at')}  ")
     lines.append(f"扫描根目录：`{escape_md(result.get('root'))}`  ")
@@ -1069,15 +1207,15 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
         lines.append(f"目标关键词：`{escape_md(', '.join(result.get('keywords', [])))}`  ")
     lines.append("")
 
+    fail_ids = [str(row.get("id")) for row in factors if row.get("status") == "Fail"]
+    unknown_ids = [str(row.get("id")) for row in factors if row.get("status") == "Unknown"]
     lines.append("## 一句话结论")
     if counts.get("P0"):
-        lines.append(f"发现 {counts.get('P0')} 个 P0 阻断型问题，优先检查抓取/索引/渲染/canonical。")
-    elif counts.get("P1"):
-        lines.append(f"未发现 P0，但有 {counts.get('P1')} 个 P1 高影响问题，优先修复 title、H1、canonical、sitemap 或可抓取的 HTML。缺 description 不是 P1。")
-    elif issues:
-        lines.append("未发现明显阻断型问题，主要优化空间在内容覆盖、内链、图片和结构化数据。")
+        lines.append(f"F8 出现 P0 table-stakes 阻断（{counts.get('P0')}）。坏的技术会摔；修好也不会抬起平庸内容。因素 Fail：{', '.join(fail_ids) or '无'}。")
+    elif fail_ids:
+        lines.append(f"因素 Fail：{', '.join(fail_ids)}。Unknown（需线上数据）：{', '.join(unknown_ids) or '无'}。缺 description 只进 F5，不是 F1 排名项。")
     else:
-        lines.append("未发现脚本可识别的明显 SEO 问题；仍建议人工检查搜索意图、竞品内容差距和线上抓取结果。")
+        lines.append(f"代码可证因素未见 Fail。线上因素保持 Unknown：{', '.join(unknown_ids) or '无'}。禁止编造 CTR/外链/品牌数字。")
     lines.append("")
 
     lines.append("## 项目识别")
@@ -1090,33 +1228,67 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
         lines.append(f"- 配置文件：`{escape_md(', '.join(project.get('config_files', [])))}`")
     lines.append("")
 
-    lines.append("## 优先级总览")
-    lines.append("| 优先级 | 数量 | 含义 |")
-    lines.append("|---|---:|---|")
-    meaning = {
-        "P0": "阻断抓取、索引或核心 HTML 可见性的风险",
-        "P1": "高影响：title/H1/canonical/sitemap/意图错配等（缺 description 不是 P1）",
-        "P2": "内容、意图、内链、CTR 文案（含缺 description）、图片等中影响问题",
-        "P3": "CTR 细节、OG、schema 等增强项；不是增长解锁",
-    }
-    for sev in ["P0", "P1", "P2", "P3"]:
-        lines.append(f"| {sev} | {counts.get(sev, 0)} | {meaning[sev]} |")
+    lines.append("## Top 10 排名因素")
+    lines.append("| 因素 | Top3% | 状态 | 代码证据 | 线上信号 | 动作 |")
+    lines.append("|---|---:|---|---|---|---|")
+    for row in factors:
+        label = f"{row.get('id')} {row.get('name')}"
+        lines.append(
+            f"| {escape_md(label)} | {escape_md(row.get('share'))} | {escape_md(row.get('status'))} | {escape_md(row.get('evidence'))} | {escape_md(row.get('online_signal'))} | {escape_md(row.get('action'))} |"
+        )
+    lines.append("")
+    lines.append("状态：`Pass` 只表示代码可证范围内未见问题；`Unknown` 表示需要 GSC/外链表/品牌数据且未提供；`Fail` 表示已有代码或用户证据。hybrid 因素没有代码问题也不会标 Pass。")
     lines.append("")
 
-    if issues:
-        lines.append("## 发现的问题")
+    lines.append("## F1–F10 分项证据")
+    issues_by_factor: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    for issue in issues:
+        if issue.get("factor"):
+            issues_by_factor[str(issue.get("factor"))].append(issue)
+    for row in factors:
+        fid = str(row.get("id"))
+        lines.append(f"### {fid} {row.get('name')}（{row.get('share')}）")
+        lines.append(f"- 状态：`{row.get('status')}`")
+        lines.append(f"- 线上：{row.get('online_signal')}")
+        factor_issues = issues_by_factor.get(fid, [])
+        if factor_issues:
+            lines.append("")
+            lines.append("| 优先级 | 代码 | 文件 | 证据 | 建议 |")
+            lines.append("|---|---|---|---|---|")
+            for issue in factor_issues[:40]:
+                lines.append(
+                    f"| {escape_md(issue.get('severity'))} | {escape_md(issue.get('code'))} | `{escape_md(issue.get('file'))}` | {escape_md(issue.get('evidence'))} | {escape_md(issue.get('recommendation'))} |"
+                )
+        else:
+            lines.append(f"- 代码证据：{row.get('evidence')}")
+        lines.append("")
+
+    copy_issues = [i for i in issues if i.get("code") in {"YMYL_COPY_REVIEW", "INTERNAL_COPY_LEAK"}]
+    if copy_issues:
+        lines.append("## 文案风险（YMYL / 内部泄露）")
+        lines.append("横切项；YMYL 同时记入 F4，内部泄露同时记入 F3。")
+        lines.append("")
         lines.append("| 优先级 | 代码 | 文件 | 证据 | 建议 |")
         lines.append("|---|---|---|---|---|")
-        for issue in issues[:120]:
+        for issue in copy_issues:
             lines.append(
                 f"| {escape_md(issue.get('severity'))} | {escape_md(issue.get('code'))} | `{escape_md(issue.get('file'))}` | {escape_md(issue.get('evidence'))} | {escape_md(issue.get('recommendation'))} |"
             )
-        if len(issues) > 120:
-            lines.append(f"\n仅展示前 120 条，完整结果见 JSON，共 {len(issues)} 条。")
+        lines.append("")
+
+    unmapped = [i for i in issues if not i.get("factor")]
+    if unmapped:
+        lines.append("## 未映射问题")
+        lines.append("| 优先级 | 代码 | 文件 | 证据 | 建议 |")
+        lines.append("|---|---|---|---|---|")
+        for issue in unmapped[:40]:
+            lines.append(
+                f"| {escape_md(issue.get('severity'))} | {escape_md(issue.get('code'))} | `{escape_md(issue.get('file'))}` | {escape_md(issue.get('evidence'))} | {escape_md(issue.get('recommendation'))} |"
+            )
         lines.append("")
 
     if html_pages:
-        lines.append("## HTML 页面摘要")
+        lines.append("## 页面取证摘要")
         lines.append("| 文件 | Title | H1 | 文本字符 | 图片/缺 alt | 内链 | Canonical |")
         lines.append("|---|---|---|---:|---:|---:|---|")
         for page in html_pages[:80]:
@@ -1128,8 +1300,8 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
         lines.append("")
 
     if result.get("keywords") and html_pages:
-        lines.append("## 关键词覆盖与堆砌检查")
-        lines.append("密度**不是**优化目标，也不存在 3%–5% 或 8% 达标区间。脚本只在目标词未出现或密度异常高（堆砌启发式）时报警，**不会**因为密度低报警。")
+        lines.append("## F1 子项：关键词覆盖与堆砌")
+        lines.append("密度不是优化目标，也不存在 3%–5% 或 8% 达标区间。只在目标词未出现或异常堆砌时报警，不报密度低。")
         lines.append("")
         lines.append("| 文件 | 关键词 | 出现次数 | 估算密度（仅供堆砌判断） |")
         lines.append("|---|---|---:|---:|")
@@ -1142,7 +1314,7 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
 
     source_summary = result.get("source_audit", {}).get("summary", {})
     if source_summary:
-        lines.append("## 源码 SEO 信号")
+        lines.append("## F8 子项：源码技术信号")
         lines.append(f"- 扫描源码文件：{source_summary.get('files_scanned', 0)}")
         for key, label in [
             ("route_files", "疑似路由文件"),
@@ -1163,25 +1335,13 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
     if result.get("adsense_audit"):
         write_adsense_markdown(lines, result.get("adsense_audit", {}))
 
-    lines.append("## 线上才能验证的信号")
-    lines.append("本脚本是代码审计，不是 GSC/Ahrefs 替代品。下列信号没有用户提供的数据时必须标 Unknown，禁止编造数字。")
-    lines.append("")
-    lines.append("| 信号 | 代码侧能说什么 | 需要的线上证据 | 默认状态 |")
-    lines.append("|---|---|---|---|")
-    lines.append("| GSC 点击质量 / CTR | title/description 是否像 CTR 文案；缺 description 是 CTR 杠杆，不是排名因子 | GSC 展示、点击、CTR、查询与着陆页是否匹配 | Unknown |")
-    lines.append("| 任务完成 / 满意度 | 页面模块是否像能完成该任务 | 用户研究、回访、GSC 查询满意度；不要用 bounce rate | Unknown |")
-    lines.append("| 品牌查询与口碑 | 是否有 About/作者/来源等信任模块 | 品牌词搜索、评价、提及 | Unknown |")
-    lines.append("| 外链质量 | 无 | 来自受信任、主题相关、有真实访问的页面的链接；不是链接数量 | Unknown |")
-    lines.append("| 主题权威强度 | 是否有支柱+集群结构 | 该主题下的可见性/提及 | Unknown |")
-    lines.append("")
-
     lines.append("## 建议下一步")
-    lines.append("1. 先修 P0/P1 table stakes：抓取、索引、SSR/SSG、title 相关性、H1、canonical、sitemap。好的技术不会抬起平庸内容。")
-    lines.append("2. 再做意图-页面映射：每个 URL 满足哪一种结果类型/任务；很多页都匹配时补一手/原创信息增益。")
-    lines.append("3. 对核心落地页补齐模块：工具入口、How it works、Features、场景、FAQ、证言、相关链接、CTA。")
-    lines.append("4. 加强内链（可控制杠杆）：上级页链接下级页，下级页用明确锚文本链接回上级页。")
-    lines.append("5. 标题/描述 CTR 与缺 description 按 P2/P3 处理，不要写成排名 P1。")
-    lines.append("6. 构建后查看网页源代码，确认核心文案、title、H1/H2/H3、canonical、JSON-LD 都在 HTML 中可见。")
+    lines.append("1. F8 table stakes：先修会摔的抓取/SSR/canonical/sitemap。")
+    lines.append("2. F1：每个 URL 满足哪一种结果类型/任务；很多页都匹配时补 F3 信息增益。")
+    lines.append("3. F7：工具/游戏首屏必须能完成任务。")
+    lines.append("4. F10：具体内链，不谈权重分。")
+    lines.append("5. F5：title/description 只当 CTR；缺 description 不是 F1/P1。")
+    lines.append("6. F2/F4/F6/F9 的线上强度保持 Unknown，除非用户提供外链表、GSC 或品牌数据。")
     lines.append("")
 
     output_path.write_text("\n".join(lines), encoding="utf-8")
@@ -1233,6 +1393,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
     if args.adsense:
         result["adsense_audit"] = audit_adsense_readiness(result, root, all_files)
+    result["factor_summary"] = build_factor_summary(result)
 
     out_prefix = Path(args.out)
     if not out_prefix.is_absolute():

@@ -115,3 +115,25 @@
 - 把「多做外链」写成上线后主路径；应写成信任 + 主题相关 + 真实读者。
 
 密度只保留一个用途：异常高时提示堆砌。覆盖缺失用「目标词未出现 / 意图未覆盖」，不用「密度偏低」。
+
+## Skill 章节 ↔ 因素一一映射
+
+打开 `SKILL.md` 的「标准工作流 / 必查项」应直接是 F1–F10，而不是旧 TDK 目录。下表是硬映射。
+
+| 因素 | SKILL.md | seo-principles.md | diagnostic-rubric.md | 脚本报告章节 | 旧检查挂到哪里 |
+|---|---|---|---|---|---|
+| F1 Relevance 57.1% | `#### F1. Relevance / Search Intent Match` | 同名章 | 同名表 | Top 10 主表 + F1 分项 | title 相关性、H1、意图模块、关键词覆盖、堆砌（非密度目标） |
+| F2 Backlinks 54.8% | `#### F2. Backlinks` | 同名章 | 同名表 | 主表默认 Unknown | 外链；有链接表才评信任/主题/真实访客/垃圾/EM 锚 |
+| F3 Content Quality 47.6% | `#### F3. Content Quality` | 同名章 | 同名表 | 主表 + 薄内容/一手代理 | 薄页、一手数据、规模 AI、假 schema |
+| F4 Authority & Trust 36.5% | `#### F4. Authority & Trust` | 同名章 | 同名表 | 主表 | About/作者/来源；YMYL 承诺 |
+| F5 Behavior / Click 29.4% | `#### F5. Behavior / Click Signals` | 同名章 | 同名表 | 主表；无 GSC=Unknown | title CTR、**meta description 只挂这里** |
+| F6 Brand Signals 27.0% | `#### F6. Brand Signals` | 同名章 | 同名表 | 主表 | 实体一致性；广告花费不作为动作 |
+| F7 User Satisfaction 19.8% | `#### F7. User Satisfaction` | 同名章 | 同名表 | 主表 | 工具首屏能否完成任务 |
+| F8 Technical 17.5% | `#### F8. Technical SEO Health` | 同名章 | 同名表 | 主表 | 抓取、SSR/CSR、canonical、sitemap、框架 head、CWV 不当 P1 |
+| F9 Topical Authority 14.3% | `#### F9. Topical Authority` | 同名章 | 同名表 | 主表 | 支柱+集群、目录站分门别类 |
+| F10 Internal Links 11.1% | `#### F10. Internal Links` | 同名章 | 同名表 | 主表 | 层级、孤儿、锚文本 |
+| 横切 | `### 4. 横切检查` | 文末横切 | 文末横切 | 文案风险节 | YMYL、内部泄露 |
+| AdSense | `### 5. AdSense…（独立章节）` | 点到 ADS 文件 | 独立专项 | AdSense 节 | 全部 ADS-*，不并入主表 |
+
+输出主表必须是上面 10 行，状态为 `Pass` / `Fail` / `Unknown` / `N/A`。
+

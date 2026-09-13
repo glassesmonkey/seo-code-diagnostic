@@ -2,7 +2,7 @@
 
 一个用于 Codex 的网站代码 SEO 和 AdSense 审核诊断 skill。
 
-它是**代码仓库审计**，不是 Ahrefs / Google Search Console 的替代品。判断框架对齐 [2026 Zyppy Google Ranking Factors Expert Survey](https://signal.zyppy.com/p/google-ranking-factors-expert-survey)（Cyrus/Dawn Shepard，131 位 SEO，2026-09）：专家共识 ≠ Google 官方权重。技术 SEO 是 table stakes；meta description 按 CTR 杠杆，不是排名 P1；关键词密度只用于发现堆砌，不作为 3%–5% 优化目标，也不因为「密度太低」报警。没有用户提供的 GSC/Ahrefs 数据时，行为、品牌、外链质量必须标 Unknown，禁止编造指标。
+它是**代码仓库审计**，不是 Ahrefs / Google Search Console 的替代品。`SKILL.md` 的工作流和报告主表按 [2026 Zyppy Google Ranking Factors Expert Survey](https://signal.zyppy.com/p/google-ranking-factors-expert-survey) 的 Top 10 组织（Relevance → Internal Links）。专家共识 ≠ Google 官方权重。旧 TDK / 密度 / 八模块落地页不再当目录，只作为对应因素的子项。meta description 只挂在 F5 CTR；密度只抓堆砌。没有 GSC/外链表/品牌数据时，F2/F5/F6/F7 等线上信号必须 `Unknown`。
 
 ## 安装
 
@@ -42,14 +42,14 @@ Cover every ADS-* requirement ID with Pass/Fail/Unknown/N/A, evidence, next acti
 
 ## 包含内容
 
-- `SKILL.md`：Codex 主要工作流和诊断规则。
-- `scripts/seo_code_audit.py`：离线静态扫描脚本，输出 JSON/Markdown。
-- `references/zyppy-2026-ranking-factors.md`：2026 Zyppy 专家调研摘要，以及哪些信号能从代码证明、必须标 Unknown。
-- `references/ahrefs-learning-notes.md`：Ahrefs 官方教程的诊断化学习笔记。
-- `references/adsense-requirements.md`：AdSense 官方来源驱动的 ADS-* 完整审核清单、状态规则和输出协议。
-- `references/adsense-review-diagnostic.md`：AdSense 审核、low value content 和游戏/工具站薄壳风险诊断。
-- `references/seo-principles.md`：中文 SEO 方法论和诊断原则的结构化整理。
-- `references/diagnostic-rubric.md`：P0–P3 诊断标准。
+- `SKILL.md`：按 F1–F10 组织的诊断流和报告模板。
+- `scripts/seo_code_audit.py`：离线静态扫描；Markdown/JSON 主表对齐 Top 10。
+- `references/zyppy-2026-ranking-factors.md`：调研摘要 + skill 章节↔因素映射。
+- `references/seo-principles.md`：按 Top 10 写的方法论。
+- `references/diagnostic-rubric.md`：按 Top 10 重组的严重级别。
+- `references/ahrefs-learning-notes.md`：Ahrefs 教程的诊断化笔记（与 Zyppy 冲突时以代码审计规则为准）。
+- `references/adsense-requirements.md`：ADS-* 完整清单（独立章节）。
+- `references/adsense-review-diagnostic.md`：AdSense 薄壳/low value 经验。
 - `agents/openai.yaml`：Codex UI 元信息。
 
 ## 静态扫描脚本用法
