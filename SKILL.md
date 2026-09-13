@@ -60,7 +60,7 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py --root . --out seo
 
 #### F1. Relevance / Search Intent Match（57.1%）
 
-**定义（调查）**：内容相关 = 匹配并满足搜索意图。Search Intent Match 是单项第 1：页面是否满足搜索者想要的**结果类型或任务**，超出关键词和语义相近。技术完美但答非所问，救不了。当很多页都已匹配意图并覆盖同一范围时，看 **information gain**（有没有别人没有的东西）。
+**定义（调查）**：内容相关 = 匹配并满足搜索意图。Search Intent Match 是单项第 1：页面是否满足搜索者想要的**结果类型或任务**，超出关键词和语义相近。技术完美但答非所问，救不了。当很多页都已匹配意图并覆盖同一范围时，看 **information gain**（有没有别人没有的东西）。专家评论仍提到 **EMD（Exact Match Domain）unexpectedly effective**（例如同一竞争词上，EMD 比主品牌域更省力）；这是专家观察，**不是 Google 官方保证**。
 
 **代码仓库能查**：
 
@@ -69,10 +69,11 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py --root . --out seo
 - 可见正文是否在完成该任务。工具/SaaS 子项：入口、How it works、能力、场景、能增加信息增益的 FAQ、相关页、再次 CTA。目录站子项：H1/H2/H3 是否按任务/主题分层，而不是为了堆词。
 - 一个 URL 是否同时抢多个完全不同的意图（该拆页）。
 - 目标词是否在可见文本中自然出现。**密度不是目标**；不追求 3%–5%，也不把 8% 当达标线。只在异常高时标堆砌。不要报「密度太低」。
+- **域名意图匹配 / EMD**：看 `--domain` 或 canonical host 的可注册标签是否精确或高度匹配主意图词（如 `bankstatementconverter*.*` 对 “bank statement converter”）。写入 Relevance 行，作为相关性**加分观察**。
 
-**必须 Unknown**：真实用户打开后是否觉得「就是我要的那种结果」；竞品 SERP 上的信息增益比较（除非用户提供 SERP/竞品）。
+**必须 Unknown**：真实用户打开后是否觉得「就是我要的那种结果」；竞品 SERP 上的信息增益比较（除非用户提供 SERP/竞品）。EMD 的真实排名贡献也不是官方权重，只能当观察。
 
-**严重级别**：页面明显答非所问或结果形态错 → P1。意图模块残缺、title 与任务偏离、目标词应出现却完全没有、堆砌 → P2。标题层级抛光 → P3。缺 title → P1（无法表达意图）。**缺 meta description 不进本因素。**
+**严重级别**：页面明显答非所问或结果形态错 → P1。意图模块残缺、title 与任务偏离、目标词应出现却完全没有、堆砌 → P2。标题层级抛光 → P3。缺 title → P1（无法表达意图）。**缺 meta description 不进本因素。** 域名不是 EMD **不判 Fail**；已有品牌域保持 Pass/Fail 只由内容与意图决定。不要建议为了 SEO 去买垃圾 / spammy EMD。连字符堆词域名只标注风险观察，不写成「快去买 EMD」。
 
 #### F2. Backlinks（54.8%）
 
@@ -229,7 +230,7 @@ AdSense 不并入 Top 10 主表。第一问：这个网站是否值得展示广�
 ## Top 10 排名因素
 | 因素 | Top3% | 状态 | 代码证据 | 线上信号 | 动作 |
 |---|---:|---|---|---|---|
-| F1 Relevance / Search Intent Match | 57.1% | Pass/Fail/Unknown/N/A | … | 竞品/SERP 信息增益常 Unknown | … |
+| F1 Relevance / Search Intent Match | 57.1% | Pass/Fail/Unknown/N/A | 结果形态/title/H1；**域名意图匹配 / EMD 观察** | 竞品/SERP 信息增益常 Unknown | 非 EMD 不 Fail；不买垃圾 EMD |
 | F2 Backlinks | 54.8% | 默认 Unknown | 无链接表则写「无」 | 信任域/主题/真实访客/垃圾链/EM 锚占比 | 有表才评，不追求数量 |
 | F3 Content Quality | 47.6% | … | 一手/原创 vs 薄/规模 AI | 外部准确性 Unknown | … |
 | F4 Authority & Trust | 36.5% | … | About/作者/来源 | 信任强度 Unknown | … |
@@ -276,3 +277,4 @@ Completeness Check: 73 / <count> / missing
 - 不要只看组件里有没有 `<h1>`，要看构建后 HTML。
 - 不要承诺 AdSense 一定通过。
 - 不要把旧 TDK checklist 当成报告主目录。
+- 不要建议为了 SEO 去买垃圾 / spammy EMD；不要因为品牌域不是 EMD 而把 F1 判 Fail。

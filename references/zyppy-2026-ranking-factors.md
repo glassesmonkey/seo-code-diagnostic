@@ -16,7 +16,7 @@
 
 | 因子 | Top 3 入选 | 调研原意（摘要） | 本 skill 怎么用 |
 |---|---:|---|---|
-| Relevance | 57.1% | 内容匹配并满足搜索意图 | 代码可推断：页面类型、任务模块、title/H1/正文是否答在点上 |
+| Relevance | 57.1% | 内容匹配并满足搜索意图 | 代码可推断：页面类型、任务模块、title/H1/正文；**域名意图匹配 / EMD 观察**（加分，品牌域非 EMD 不 Fail） |
 | Backlinks | 54.8% | 来自受信任、主题相关、有真实访问的页面的链接 | 无数据 = `Unknown`；不追求链接数量 |
 | Content Quality | 47.6% | 原创、准确、新鲜；一手数据 | 代码可推断：是否有原创/一手/独特解释；批量低质 AI 标风险 |
 | Authority & Trust | 36.5% | Google 对站点/创作者/品牌的信任 | 代码只能看信任模块是否存在；强度 = `Unknown` |
@@ -36,6 +36,7 @@
 - 技术完美但答非所问，救不了排名。
 - **信息增益**：当很多页面都已匹配意图并覆盖同一范围时，差别在于有没有别人没有的东西。
 - 代码侧：对照页面类型（工具/教程/对比/目录）和模块（步骤、示例、FAQ、数据），判断是否在完成该任务。不要用关键词密度代替意图匹配。
+- **EMD（Exact Match Domain）**：专家评论写到 EMD 仍然 unexpectedly effective（同一竞争词上，EMD 可比主品牌域更省力）。本 skill 把它挂在 F1：检查 canonical host / 域名是否精确或高度匹配主意图词（如 `bankstatementconverter*.*`）。只作相关性加分观察，**≠ Google 官方保证**。不要建议为了 SEO 去买垃圾 / spammy EMD；已有品牌域不因「不是 EMD」判 Fail。报告 Top 10 的 Relevance 行必须写出「域名意图匹配 / EMD 观察」。
 
 ### 2. Meta description 不是排名 P1
 
@@ -122,7 +123,7 @@
 
 | 因素 | SKILL.md | seo-principles.md | diagnostic-rubric.md | 脚本报告章节 | 旧检查挂到哪里 |
 |---|---|---|---|---|---|
-| F1 Relevance 57.1% | `#### F1. Relevance / Search Intent Match` | 同名章 | 同名表 | Top 10 主表 + F1 分项 | title 相关性、H1、意图模块、关键词覆盖、堆砌（非密度目标） |
+| F1 Relevance 57.1% | `#### F1. Relevance / Search Intent Match` | 同名章 | 同名表 | Top 10 主表必须含「域名意图匹配 / EMD 观察」+ F1 分项 | title 相关性、H1、意图模块、关键词覆盖、堆砌（非密度目标）、**EMD/host 与主意图词** |
 | F2 Backlinks 54.8% | `#### F2. Backlinks` | 同名章 | 同名表 | 主表默认 Unknown | 外链；有链接表才评信任/主题/真实访客/垃圾/EM 锚 |
 | F3 Content Quality 47.6% | `#### F3. Content Quality` | 同名章 | 同名表 | 主表 + 薄内容/一手代理 | 薄页、一手数据、规模 AI、假 schema |
 | F4 Authority & Trust 36.5% | `#### F4. Authority & Trust` | 同名章 | 同名表 | 主表 | About/作者/来源；YMYL 承诺 |

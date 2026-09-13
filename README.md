@@ -2,7 +2,7 @@
 
 一个用于 Codex 的网站代码 SEO 和 AdSense 审核诊断 skill。
 
-它是**代码仓库审计**，不是 Ahrefs / Google Search Console 的替代品。`SKILL.md` 的工作流和报告主表按 [2026 Zyppy Google Ranking Factors Expert Survey](https://signal.zyppy.com/p/google-ranking-factors-expert-survey) 的 Top 10 组织（Relevance → Internal Links）。专家共识 ≠ Google 官方权重。旧 TDK / 密度 / 八模块落地页不再当目录，只作为对应因素的子项。meta description 只挂在 F5 CTR；密度只抓堆砌。没有 GSC/外链表/品牌数据时，F2/F5/F6/F7 等线上信号必须 `Unknown`。
+它是**代码仓库审计**，不是 Ahrefs / Google Search Console 的替代品。`SKILL.md` 的工作流和报告主表按 [2026 Zyppy Google Ranking Factors Expert Survey](https://signal.zyppy.com/p/google-ranking-factors-expert-survey) 的 Top 10 组织（Relevance → Internal Links）。专家共识 ≠ Google 官方权重。旧 TDK / 密度 / 八模块落地页不再当目录，只作为对应因素的子项。F1 含域名意图匹配 / EMD 观察（专家评论，≠ 官方保证；品牌域非 EMD 不 Fail）。meta description 只挂在 F5 CTR；密度只抓堆砌。没有 GSC/外链表/品牌数据时，F2/F5/F6/F7 等线上信号必须 `Unknown`。
 
 ## 安装
 

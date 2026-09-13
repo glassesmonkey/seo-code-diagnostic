@@ -135,7 +135,7 @@ ISSUE_TO_FACTOR = {
 }
 
 FACTOR_ONLINE = {
-    "F1": "竞品 SERP / 真实意图满足度常 Unknown",
+    "F1": "竞品 SERP / 真实意图满足度常 Unknown。EMD 是专家观察，≠ 官方保证",
     "F2": "信任域、主题相关、真实访客、垃圾链、EM 锚占比；无链接表则 Unknown",
     "F3": "外部准确性/新鲜度 Unknown；不打质量分",
     "F4": "信任强度 / 外部口碑 Unknown",
@@ -148,7 +148,7 @@ FACTOR_ONLINE = {
 }
 
 FACTOR_DEFAULT_ACTION = {
-    "F1": "按结果形态/任务改 title、H1 和正文；不要补密度。",
+    "F1": "按结果形态/任务改 title、H1 和正文；记录域名意图匹配/EMD 观察。不要补密度，不要买垃圾 EMD。",
     "F2": "没有链接表就保持 Unknown；有表则评信任域+主题+真实访客，不追求数量。",
     "F3": "补一手/原创信息；停掉规模化低质 AI 薄壳。",
     "F4": "补真实身份/来源；YMYL 改成信息性说明。强度保持 Unknown。",
@@ -353,6 +353,114 @@ def normalize_domain(domain: Optional[str]) -> Optional[str]:
 def token_count(text: str) -> int:
     # English words/numbers + individual CJK chars as rough searchable units.
     return len(re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]", text))
+
+
+def compact_intent(text: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", (text or "").lower())
+
+
+def registrable_label(host: str) -> str:
+    host = (host or "").lower().split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    parts = [p for p in host.split(".") if p]
+    two_level = {"co", "com", "net", "org", "ac", "gov", "edu"}
+    if len(parts) >= 3 and parts[-2] in two_level:
+        return parts[-3]
+    if len(parts) >= 2:
+        return parts[-2]
+    return parts[0] if parts else ""
+
+
+def emd_match_level(label: str, host: str, keyword: str) -> str:
+    """exact | high | none. Observation only; never a Fail reason by itself."""
+    ks = compact_intent(keyword)
+    sl = compact_intent(label)
+    hs = compact_intent(host)
+    if not ks:
+        return "unknown"
+    if sl and sl == ks:
+        return "exact"
+    if sl and (ks in sl or sl in ks):
+        return "high"
+    if hs and ks in hs:
+        return "high"
+    tokens = [t for t in re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", (keyword or "").lower()) if len(t) > 1]
+    if tokens and sl and all(compact_intent(t) in sl for t in tokens):
+        return "high"
+    return "none"
+
+
+def looks_spammy_emd_host(host: str, keyword: str) -> bool:
+    if not host:
+        return False
+    if host.count("-") < 3:
+        return False
+    compact_host = compact_intent(host)
+    if keyword and compact_intent(keyword) and compact_intent(keyword) in compact_host:
+        return True
+    tokens = [t for t in re.findall(r"[a-z0-9]+", (keyword or "").lower()) if len(t) > 2]
+    return bool(tokens) and all(t in compact_host for t in tokens)
+
+
+def collect_candidate_hosts(domain: Optional[str], html_pages: List[Dict[str, object]]) -> List[str]:
+    hosts: List[str] = []
+    seen = set()
+
+    def add(host: str) -> None:
+        host = (host or "").lower().split(":")[0].strip()
+        if host.startswith("www."):
+            host = host[4:]
+        if host and host not in seen:
+            seen.add(host)
+            hosts.append(host)
+
+    if domain:
+        add(urlparse(domain).netloc)
+    for page in html_pages:
+        canonical = str(page.get("canonical") or "")
+        if is_absolute_http_url(canonical):
+            add(urlparse(canonical).netloc)
+    return hosts
+
+
+def assess_emd_observation(
+    domain: Optional[str], keywords: List[str], html_pages: List[Dict[str, object]]
+) -> Dict[str, object]:
+    """F1 sub-item: domain-intent / EMD observation. Never Fail a brand domain for not being EMD."""
+    hosts = collect_candidate_hosts(domain, html_pages)
+    primary = keywords[0] if keywords else ""
+    host = hosts[0] if hosts else ""
+    label = registrable_label(host) if host else ""
+    spammy = looks_spammy_emd_host(host, primary)
+    source = "来源：Zyppy 2026 专家评论（EMD still unexpectedly effective），≠ Google 官方保证"
+
+    if not host:
+        summary = "域名意图匹配/EMD：Unknown（无 --domain 也无 canonical host）"
+        level = "unknown"
+    elif not primary:
+        summary = f"域名意图匹配/EMD：已记录 host `{host}`，未提供主意图词，无法判断是否 EMD"
+        level = "no_keyword"
+    else:
+        level = emd_match_level(label, host, primary)
+        if level == "exact":
+            summary = f"域名意图匹配/EMD：精确匹配 `{host}` ≈ `{primary}`（相关性加分观察）"
+        elif level == "high":
+            summary = f"域名意图匹配/EMD：高度匹配 `{host}` ~ `{primary}`（相关性加分观察）"
+        else:
+            summary = f"域名意图匹配/EMD：非 EMD（`{host}`）。已有品牌域不因此判 Fail"
+        if spammy:
+            summary += "；host 连字符很多，像 spammy EMD，不要建议购买这类域"
+
+    return {
+        "level": level,
+        "host": host,
+        "label": label,
+        "keyword": primary,
+        "spammy_looking": spammy,
+        "summary": summary,
+        "note": f"{source}。只作加分观察；不要为了 SEO 买垃圾 EMD。",
+    }
 
 
 def keyword_density(text: str, keyword: str) -> Dict[str, object]:
@@ -999,6 +1107,11 @@ def build_factor_summary(result: Dict[str, object]) -> List[Dict[str, object]]:
             status = "Unknown"
             preview = "代码无法证明该因素的线上强度；禁止编造指标"
             action = FACTOR_DEFAULT_ACTION[fid]
+        if fid == "F1":
+            emd = result.get("emd_observation") or {}
+            emd_summary = str(emd.get("summary") or "").strip()
+            if emd_summary:
+                preview = f"{emd_summary}。{preview}" if preview else emd_summary
         rows.append(
             {
                 "id": fid,
@@ -1010,6 +1123,7 @@ def build_factor_summary(result: Dict[str, object]) -> List[Dict[str, object]]:
                 "online_signal": FACTOR_ONLINE[fid],
                 "action": action,
                 "issue_count": len(factor_issues),
+                **({"emd_level": (result.get("emd_observation") or {}).get("level")} if fid == "F1" else {}),
             }
         )
     return rows
@@ -1261,6 +1375,11 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
                 )
         else:
             lines.append(f"- 代码证据：{row.get('evidence')}")
+        if fid == "F1":
+            emd = result.get("emd_observation") or {}
+            if emd:
+                lines.append(f"- 域名意图匹配/EMD：{emd.get('summary')}")
+                lines.append(f"- {emd.get('note')}")
         lines.append("")
 
     copy_issues = [i for i in issues if i.get("code") in {"YMYL_COPY_REVIEW", "INTERNAL_COPY_LEAK"}]
@@ -1297,6 +1416,17 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
             lines.append(
                 f"| `{escape_md(page.get('file'))}` | {escape_md(page.get('title'))} | {escape_md(h1)} | {page.get('text_chars', 0)} | {img} | {page.get('internal_links', 0)} | {escape_md(page.get('canonical'))} |"
             )
+        lines.append("")
+
+    emd = result.get("emd_observation") or {}
+    if emd:
+        lines.append("## F1 子项：域名意图匹配 / EMD")
+        lines.append(f"- 级别：`{escape_md(emd.get('level'))}`")
+        lines.append(f"- host：`{escape_md(emd.get('host') or '（无）')}`；可注册标签：`{escape_md(emd.get('label') or '（无）')}`")
+        lines.append(f"- 主意图词：`{escape_md(emd.get('keyword') or '（未提供）')}`")
+        lines.append(f"- 观察：{escape_md(emd.get('summary'))}")
+        lines.append(f"- {escape_md(emd.get('note'))}")
+        lines.append("- 口径：加分观察；品牌域不是 EMD 不判 Fail；不要建议购买垃圾/spammy EMD。")
         lines.append("")
 
     if result.get("keywords") and html_pages:
@@ -1393,6 +1523,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
     if args.adsense:
         result["adsense_audit"] = audit_adsense_readiness(result, root, all_files)
+    result["emd_observation"] = assess_emd_observation(domain, keywords, html_pages)
     result["factor_summary"] = build_factor_summary(result)
 
     out_prefix = Path(args.out)
