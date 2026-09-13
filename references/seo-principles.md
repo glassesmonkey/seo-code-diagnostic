@@ -6,9 +6,9 @@
 
 ## F1. Relevance / Search Intent Match（57.1%）
 
-相关 = 满足搜索者要的结果类型或任务，不是堆关键词。技术完美但答非所问，救不了。
+相关 = 满足搜索者要的结果类型或任务，不是堆关键词。
 
-很多页都已匹配意图时，比的是 information gain：一手数据、独特方法、竞品没写的限制或反例。
+专家实战（≠ 官方保证）：答非所问 → Fail，技术再好也救不了。十页都匹配意图后，多出来的信息决定胜负——无增量 → Fail，无 SERP → 增益 Unknown。EMD still effective：host 匹配主意图词只作加分观察，品牌域非 EMD 不 Fail，不买垃圾 EMD。
 
 代码里看：
 
@@ -25,6 +25,8 @@
 
 没有链接表时整项 Unknown。不要从代码发明外链数。
 
+专家实战（≠ 官方保证）：100 条有真人受众的链 > 1000 条没人点的链；最强是高信任域 + 主题相关页。Spam 仍当大负向（即使谷歌口头说会忽略多数）。EM 锚看画像占比，过浓反噬。高质量提及可能连带抬 AI 可见度（Reuters 个例）—标推断，不编倍数。
+
 有表时按质量评，不按数量：
 
 - 信任域名 + 主题相关 + 来源页有真实访客。
@@ -35,19 +37,23 @@
 
 ## F3. Content Quality（47.6%）
 
-优先 Original Research / First-Party Data。规模化低质 AI 为负。人工编审过的 AI + 独特内容/UGC 可以接受。
+专家实战（≠ 官方保证）：一手数据抬头。AI 让内容变便宜，质量是过滤器；廉价规模 AI → Fail。高质量 AI + 人工深编 + 独特/UGC 可正例。共识太多看不见，增益过大又可能过专家向——找 Goldilocks。
 
 代码里找代理：独特数据、方法、限制、真实 UGC；薄壳和重复模板。不要打质量分。不要伪造 schema 评论。
 
 ## F4. Authority & Trust（36.5%）
 
-代码只能证明信任模块在不在：About、作者、来源、资质、真实组织信息。信任强度 Unknown。
+专家实战（≠ 官方保证）：流行度看被谈论/分享/链接/提及，无数据 Unknown。过专家向可能伤害大众可见度。品牌/信任强时技术和内容差点仍可能撑——但代码里的 P0 仍要修，强度本身 Unknown。
+
+代码只能证明信任模块在不在：About、作者、来源、资质、真实组织信息。
 
 YMYL 承诺型文案会破坏信任，必须改成信息性说明或撤主题。
 
 ## F5. Behavior / Click Signals（29.4%）
 
 没有 GSC：行为本身 Unknown。Bounce rate 不用。
+
+专家实战（≠ 官方保证）：Navboost 仍强；应按页面类型建满意度代理。点击差于同 SERP 竞品会有排名天花板（有比较表才 Fail）。Pogo-stick / Return to SERP 才是清晰负向。
 
 代码只评 CTR 文案代理：
 
@@ -58,17 +64,17 @@ YMYL 承诺型文案会破坏信任，必须改成信息性说明或撤主题。
 
 ## F6. Brand Signals（27.0%）
 
-品牌词搜索量和外部声誉 Unknown。代码看名称、域名、logo、About、同一实体是否一致。广告花费几乎无直接排名作用，不要写成主动作。
+专家实战（≠ 官方保证）：Branded search ≈ 新外链（专家说法），无品牌查询数据则 Unknown。Ad spend 几乎无直接作用，最多间接可见度，不要写成排名动作。
+
+品牌词搜索量和外部声誉 Unknown。代码看名称、域名、logo、About、同一实体是否一致。
 
 ## F7. User Satisfaction（19.8%）
 
-核心是 task completion。工具站：首屏能不能做完那件事（真入口，不是营销壳）。
-
-真实满意度 Unknown。代码只判断任务路径是否存在且可走完。
+核心是 task completion。专家实战（≠ 官方保证）：按页面类型建满意度代理；UX 更多通过行为影响排名。工具站首屏能不能做完那件事（真入口，不是营销壳）。真实满意度 Unknown。不要用 bounce。
 
 ## F8. Technical SEO Health（17.5%）
 
-Table stakes。坏了能摔：robots/noindex、无 HTML、canonical 错、纯 CSR。好了也抬不起平庸内容。CWV 常被高估，不当 P1。
+Table stakes。专家实战（≠ 官方保证）：商品化——赢不了比赛但能输掉。canonical 指错可立刻伤展示/点击（只写「曾有立即恢复」，不编幅度）。越来越也是机器理解基础设施。Speed/CWV 常被高估：能打开 vs 超时；大电商另说。坏了能摔：robots/noindex、无 HTML、canonical 错、纯 CSR。好了也抬不起平庸内容。CWV 不当 P1。
 
 旧「SSR / canonical / sitemap / robots」整段属于这里：
 
@@ -79,11 +85,11 @@ Table stakes。坏了能摔：robots/noindex、无 HTML、canonical 错、纯 CS
 
 ## F9. Topical Authority（14.3%）
 
-结构代理：支柱 + 集群。目录站把主题分门别类映射到页面层级和标题层级（例如 coloring pages → dog → cute dog），这是 F9，不是独立「首页策略章」。权威强度 Unknown，不打分。
+结构代理：支柱 + 集群。专家实战（≠ 官方保证）：看站点是否被关联成某主题专家——结构能证代理，强度 Unknown。同构套话集群不要装成权威。目录站把主题分门别类映射到页面层级（例如 coloring pages → dog → cute dog）。
 
 ## F10. Internal Links（11.1%）
 
-可控杠杆。首页链二级、二级链三级、下级用清楚锚文本回链、提到某主题就链到对应页。输出必须是来源页 / 锚文本 / 目标页 / 原因。外链质量仍在 F2，不要和内链混成「链接数量」。
+专家实战（≠ 官方保证）：好内链 ≈ 很好的外链（量级说法，不编分）。全站可控：决定 equity、重要页、主题连接。首页链二级、二级链三级、下级用清楚锚文本回链。输出必须是来源页 / 锚文本 / 目标页 / 原因。外链质量仍在 F2。
 
 ## 横切
 
