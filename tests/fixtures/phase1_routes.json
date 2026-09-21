@@ -1,0 +1,10 @@
+{
+  "routes": {
+    "/": {
+      "index_intent": "Index",
+      "priority": "core",
+      "keywords": ["fixture tool"],
+      "intent_source": "test fixture"
+    }
+  }
+}

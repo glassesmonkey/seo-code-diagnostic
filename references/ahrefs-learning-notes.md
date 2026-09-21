@@ -4,7 +4,7 @@ Last reviewed: 2026-09-13
 
 这些笔记是对 Ahrefs 官方 SEO 教程/指南的诊断化整理，目的是让 Codex 在看代码时有统一判断标准。不要把这些笔记当作排名保证；它们只提供 on-page、technical、content、internal link 的审计框架。
 
-与 `zyppy-2026-ranking-factors.md` 冲突时：以 SKILL 的 F1–F10 主骨架 + 不编造线上指标为准。description 只进 F5 CTR；密度不是目标；F8 是 table stakes。这些笔记不再当诊断目录。
+与哥飞或 Zyppy 冲突时：以 `gefei-ranking-practice.md` 为准。密度用来看聚焦，不是 `3%–5%` 达标线。Meta 与词相关进 F1，同时可作 CTR。F8 是 table stakes。这些笔记不再当诊断目录。
 
 ## 参考来源
 

@@ -1,6 +1,6 @@
 interface:
   display_name: "SEO Code Diagnostic"
-  short_description: "Codebase SEO audit by Zyppy Top 10 factors; AdSense separate."
-  default_prompt: "Use $seo-code-diagnostic to audit this website codebase using the 2026 Zyppy Top 10 factor workflow (Relevance through Internal Links). Output a 10-row Pass/Fail/Unknown/N/A table. Treat Technical SEO as table stakes. Do not invent GSC/Ahrefs/backlink/CTR numbers. Flag YMYL/internal-copy risks. For AdSense, keep a separate ADS-* completeness check."
+  short_description: "URL-first SEO audit by 哥飞 Top 10 practice; AdSense separate."
+  default_prompt: "Use $seo-code-diagnostic to audit this website codebase with URL-first evidence and the Top 10 factor table. Follow 哥飞 when it conflicts with Zyppy: TDH and density for focus, one keyword group per page, sitewide internal links, backlinks required for old/competitive keywords, no fake queues. Separate Confirmed findings from Candidate and Unknown. Do not invent GSC/Ahrefs/backlink/CTR numbers. For AdSense, keep a separate ADS-* completeness check."
 policy:
   allow_implicit_invocation: true

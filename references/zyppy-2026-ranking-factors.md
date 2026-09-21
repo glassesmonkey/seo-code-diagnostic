@@ -1,6 +1,6 @@
 # 2026 Zyppy Google Ranking Factors Expert Survey
 
-本文件把 Zyppy 专家调研翻译成 **seo-code-diagnostic 的判断边界**。它校准优先级和措辞，不把专家投票变成可计算的排名权重。
+本文件把 Zyppy 专家调研翻译成因素排序校准。它不把专家投票变成可计算的排名权重。**实战检查、TDH/密度、外链场景和外链质量表以 [`gefei-ranking-practice.md`](gefei-ranking-practice.md) 为准；冲突时哥飞优先。**
 
 ## 来源与边界
 
@@ -35,16 +35,12 @@
 
 - 技术完美但答非所问，救不了排名。
 - **信息增益**：当很多页面都已匹配意图并覆盖同一范围时，差别在于有没有别人没有的东西。
-- 代码侧：对照页面类型（工具/教程/对比/目录）和模块（步骤、示例、FAQ、数据），判断是否在完成该任务。不要用关键词密度代替意图匹配。
-- **EMD（Exact Match Domain）**：专家评论写到 EMD 仍然 unexpectedly effective（同一竞争词上，EMD 可比主品牌域更省力）。本 skill 把它挂在 F1：检查 canonical host / 域名是否精确或高度匹配主意图词（如 `bankstatementconverter*.*`）。只作相关性加分观察，**≠ Google 官方保证**。不要建议为了 SEO 去买垃圾 / spammy EMD；已有品牌域不因「不是 EMD」判 Fail。报告 Top 10 的 Relevance 行必须写出「域名意图匹配 / EMD 观察」。
+- 代码侧：对照页面类型（工具/教程/对比/目录）和模块（步骤、示例、FAQ、数据），判断是否在完成该任务。意图匹配之后，用哥飞的 TDH + 聚焦密度看相关性。
+- **EMD / 关键词域名**：哥飞提倡用关键词注册域名，因为有用但只是加分。已有品牌域不是关键词域 **不** Fail。不要买连字符堆词的垃圾 EMD。报告 F1 行必须写出域名意图匹配观察。
 
-### 2. Meta description 不是排名 P1
+### 2. Meta 与关键词相关（哥飞 F1）；缺了仍不是 P1
 
-专家普遍认为 meta description 对排名几乎没有 / 没有影响。它仍可能影响 SERP CTR。
-
-- 缺 description → **P2/P3 CTR 杠杆**
-- 明确写：**不是已被证明的排名因子**
-- 不要因为缺 description 把它写成 P1「排名关键项」
+哥飞把「Meta 与关键词相关」列入内容相关性。已映射关键词时，description 缺失或与词无关记 F1 `KEYWORD_META_GAP`（P2），并同时可作为 F5 CTR 杠杆。不要因为缺 description 写成 P1 排名阻断。
 
 ### 3. 外链看质量，不看数量
 
@@ -57,7 +53,7 @@
 同时：
 
 - 垃圾链被评为最强负向之一（即便 Google 声称会忽略大部分垃圾链）
-- 精确匹配锚文本两边都有刀：到一定比例有帮助，超过则伤；变量是它在锚文本画像中的**占比**，不是原始次数
+- 精确匹配锚文本按哥飞：目标词锚最好，同时围绕核心词做多种表达；太单一才有非自然风险。Nofollow 仍有小正面效果。不相关链不是零价值。高权站孤岛目录按无效页级权处理。新词新站可以无链；老词新站必须有链。
 
 代码审计**不得**编造外链指标。用户没给 Ahrefs/GSC/链接表时，整段标 `Unknown`。
 
@@ -111,7 +107,8 @@
 | 100 条有真人受众 > 1000 条没人点 | 来源页是否像有真实读者 | 无链接表 → `Unknown`；不按条数 Pass |
 | 高信任域 + 主题相关页最强 | 来源域名信任度 + 来源页主题 | 有表且符合可偏正；农场/兑换 → `Fail` |
 | Spam 仍是大负向（即使谷歌口头说会忽略多数） | 垃圾/隐藏/页脚农场占比 | 主导 → `Fail` |
-| EM 锚文本看画像占比，过浓反噬 | 精确匹配锚占比，不是条数 | 过浓 → `Fail`/P2 |
+| EM 锚是优选，但要多样性 | 目标词锚 + 围绕核心词的多种表达 | 单一精确匹配画像 → 非自然风险；无表 → `Unknown` |
+| 新词新站 / 老词新站 | 用户是否说明词龄与站龄 | 新词新站可无链；老词新站无链 → 场景 Fail 口径 |
 | 高质量提及或抬 AI 可见度（Reuters 个例） | 用户是否提供提及/AI 引荐 | 只标推断；无数据 → `Unknown`；不编倍数 |
 
 ### Content Quality（F3）
@@ -165,7 +162,7 @@
 | 检查 | 问什么 | 优先级 |
 |---|---|---|
 | 标题相关性 | title 是否表达本页要满足的意图/任务 | 按 on-page 相关性，通常 P1（缺失）或 P2（错配） |
-| 标题/描述点击 | title 与 description 是否在 SERP 上说清价值、吸引点击 | CTR 杠杆，P2/P3；description 不按排名 P1 |
+| 标题/描述点击 | title 与 description 是否在 SERP 上说清价值、吸引点击 | CTR 杠杆，P2/P3；Meta 与词无关同时记 F1 |
 
 ## 三层证据规则（禁止发明指标）
 
@@ -177,32 +174,33 @@
 
 ## 本 skill 明确不再采用的旧口径
 
-- 把关键词密度 3%–5%（上限 8%）当成诊断或优化目标。
-- 因为「密度太低」而报警或要求补密度。
-- 把缺 meta description 写成 P1 排名关键项。
+- 把关键词密度 `3%–5%`（或 `8%` 达标）当成优化目标。`8%` 只作堆砌上限。
+- 把缺 meta description 写成 P1 排名阻断。
 - 把技术 SEO / CWV 写成增长解锁。
-- 把「多做外链」写成上线后主路径；应写成信任 + 主题相关 + 真实读者。
+- 写「外链没用了」。有竞争的词、老词新站仍然需要外链。
+- 把精确匹配锚文本写成必须避免。
+- 假排队或伪造行为数据。
 
-密度只保留一个用途：异常高时提示堆砌。覆盖缺失用「目标词未出现 / 意图未覆盖」，不用「密度偏低」。
+密度按哥飞用作聚焦诊断：发散要改到聚焦。TDH 不含词、密度被冲淡，都要报。
 
-## Skill 章节 ↔ 因素一一映射
+## 文件职责 ↔ 因素
 
-打开 `SKILL.md` 的「标准工作流 / 必查项」应直接是 F1–F10，每项含 **专家实战要点**（可执行，不是金句墙）。下表是硬映射。
+实战检查以 `gefei-ranking-practice.md` 为准。本文件只保留 Zyppy 排序与「没数据就 Unknown」。`SKILL.md` 只规定 URL-first 取证和报告顺序。
 
-| 因素 | SKILL.md | seo-principles.md | diagnostic-rubric.md | 脚本报告章节 | 旧检查挂到哪里 |
+| 因素 | 本文件 | seo-principles.md | diagnostic-rubric.md | 扫描器 | 旧检查挂到哪里 |
 |---|---|---|---|---|---|
-| F1 Relevance 57.1% | `#### F1` + 专家实战（答非所问/增益/EMD） | 同名章 + 实战 | 同名表 + 实战动作 | Top 10 主表必须含「域名意图匹配 / EMD 观察」+ F1 分项 | title 相关性、H1、意图模块、关键词覆盖、堆砌、**EMD** |
-| F2 Backlinks 54.8% | `#### F2. Backlinks` | 同名章 | 同名表 | 主表默认 Unknown | 外链；有链接表才评信任/主题/真实访客/垃圾/EM 锚 |
-| F3 Content Quality 47.6% | `#### F3. Content Quality` | 同名章 | 同名表 | 主表 + 薄内容/一手代理 | 薄页、一手数据、规模 AI、假 schema |
-| F4 Authority & Trust 36.5% | `#### F4. Authority & Trust` | 同名章 | 同名表 | 主表 | About/作者/来源；YMYL 承诺 |
-| F5 Behavior / Click 29.4% | `#### F5. Behavior / Click Signals` | 同名章 | 同名表 | 主表；无 GSC=Unknown | title CTR、**meta description 只挂这里** |
-| F6 Brand Signals 27.0% | `#### F6. Brand Signals` | 同名章 | 同名表 | 主表 | 实体一致性；广告花费不作为动作 |
-| F7 User Satisfaction 19.8% | `#### F7. User Satisfaction` | 同名章 | 同名表 | 主表 | 工具首屏能否完成任务 |
-| F8 Technical 17.5% | `#### F8. Technical SEO Health` | 同名章 | 同名表 | 主表 | 抓取、SSR/CSR、canonical、sitemap、框架 head、CWV 不当 P1 |
-| F9 Topical Authority 14.3% | `#### F9. Topical Authority` | 同名章 | 同名表 | 主表 | 支柱+集群、目录站分门别类 |
-| F10 Internal Links 11.1% | `#### F10. Internal Links` | 同名章 | 同名表 | 主表 | 层级、孤儿、锚文本 |
-| 横切 | `### 4. 横切检查` | 文末横切 | 文末横切 | 文案风险节 | YMYL、内部泄露 |
-| AdSense | `### 5. AdSense…（独立章节）` | 点到 ADS 文件 | 独立专项 | AdSense 节 | 全部 ADS-*，不并入主表 |
+| F1 Relevance 57.1% | 排序校准 | 页面任务/形态 | 规则→因素映射；缺 title 仍 P1 | F1 行含 TDH/聚焦和域名加分 | 哥飞 12 项 + TDH + 密度聚焦 |
+| F2 Backlinks 54.8% | 排序校准 | — | 默认 Unknown；场景口径必写 | 主表默认 Unknown；写新词/老词 | 哥飞 11 条好链特征 |
+| F3 Content Quality 47.6% | 一手/规模 AI/Goldilocks | 信息增益、页面类型 | 薄页/假 schema | 主表 + 薄内容代理 | 薄页、一手数据、规模 AI、假 schema |
+| F4 Authority & Trust 36.5% | 身份模块 vs 强度 Unknown | YMYL 文案 | YMYL 承诺 P1 | 主表 | About/作者/来源 |
+| F5 Behavior / Click 29.4% | Navboost/CTR；bounce 禁用 | — | CTR 文案；假排队禁止 | 无 GSC = Unknown | 行为可小博大；≠ 满意度 |
+| F6 Brand Signals 27.0% | 品牌词 Unknown；广告非动作 | 实体一致性 | OG/favicon P3 | 主表 | 名称/域名/组织 |
+| F7 User Satisfaction 19.8% | 任务完成 | 工具/游戏首屏 | 无入口/纯 iframe P1 | 主表 | 首屏能否完成任务 |
+| F8 Technical 17.5% | table stakes | — | P0/P1 抓取阻断仍在 | 主表 | 抓取、SSR/CSR、canonical、sitemap、框架 head、CWV 不当 P1 |
+| F9 Topical Authority 14.3% | 结构代理 | 目录/支柱 | 孤立页 P2 | 强度 Unknown | 一个关键词组一个页面；举全站之力 |
+| F10 Internal Links 11.1% | 来源→锚→目标 | — | 孤儿 P1 | 主表 | 层级、孤儿、锚文本 |
+| 横切 | 文末 | 真实用户语言 | YMYL/内部泄露 | 文案风险节 | YMYL、内部泄露 |
+| AdSense | 不并入主表 | — | 独立专项 | AdSense 节 | 全部 ADS-* |
 
-输出主表必须是上面 10 行，状态为 `Pass` / `Fail` / `Unknown` / `N/A`。
+输出主表必须是上面 10 行，状态为 `Pass` / `Fail` / `Unknown` / `N/A`。`Fail` 只由 Confirmed 证据产生。
 
