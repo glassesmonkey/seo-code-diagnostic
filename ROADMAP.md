@@ -2,10 +2,11 @@
 
 ## 当前阶段
 
-已按哥飞实战口径覆盖 Zyppy 冲突项。GEO 上线闸门已写入流程，不并进 F1–F10。当前无未完成阶段。
+已按哥飞实战口径覆盖 Zyppy 冲突项。GEO 上线闸门已写入流程，不并进 F1–F10。AdSense 审核已移出本 skill。当前无未完成阶段。
 
 ## 已完成
 
+- 2026-10-14 22:49：移除 AdSense 审核。扫描器不再接受 `--adsense`，报告不再包含 `adsense` 对象；73 项清单和校验器已删除。申请就绪度改用 `adsense-site-auditor`。
 - 2026-10-14 11:42：加入 GEO 上线闸门。新站一公开就可能有 GPT 流量，所以上线前只走这次要公开的页面：电脑和手机打开、点每个链接、读每段文案。第一版三五个页面算合格范围。扫描器通过不能写成可以上线。未改扫描器。
 - 建立源码仓库、安装副本和 Exact-Statement 只读验收样本之间的边界。
 - 固定 URL-first、evidence gate、隐私硬排除、AdSense 73 项完整性和验证命令。
@@ -41,13 +42,13 @@
 
 ## 最近验证
 
-1. 2026-10-14 11:42：核对 `SKILL.md`、`references/geo-launch-gate.md`、`README.md` 都指向同一道 GEO 闸门，且 Hermes / Codex / Claude / Grok 的 skill 路径是同一份文件。未改扫描器，未跑单元测试。
-2. 2026-09-13：按哥飞口径更新后 `py_compile` 与安装副本 69/69 单元测试通过。
-3. 2026-07-17：源码 67/67 单元测试、两个脚本的 `py_compile`、validator selftest 与 `git diff --check` 通过。
-4. 2026-07-17：Exact-Statement fresh build 成功；source-only 与 fresh runtime 扫描完成，runtime 为 187 个目标、81 个已验证、7 个动态路由 gap，AdSense 最终报告校验通过。
-5. 2026-07-17：Exact runtime 连续两次 `result_hash` 均为 `6b237340e4d1e9a581dc2877279bf925dcaa1f3b2dc35600ef5d726f14d9ba74`；样本 Git 状态保持 clean。
-6. 2026-07-17：安装副本与源码逐文件 diff 为空，安装副本 67/67 测试通过。
-7. 2026-07-17：互链 Phase 3 的 54/54 单元测试、`py_compile` 与 `git diff --check` 通过。
-8. 2026-07-13：Exact-Statement source-only 扫描不读取 `.next/.open-next/.source/reports/output/.env*`，`Confirmed P0-P2=0`。
-9. 2026-07-13：隔离且不含 `.env*/.dev.vars` 的 Exact 验收 clone 在 commit `b23660f` fresh build 成功；原项目与 clone Git 状态 clean。
-10. 2026-07-13：Exact fresh runtime 的 27/27 sitemap URL 均为 200；连续两次 `result_hash` 均为 `1a411abb8d2197495c74e38ec56e236333a32a1d246bf8014de1cc2d6d8be87d`，原项目与验收 clone 保持 clean。
+1. 2026-10-14 22:53：移除 AdSense 后，源码 `python3 -m unittest discover -s tests` 为 54/54 通过，`py_compile scripts/seo_code_audit.py` 与 `git diff --check` 通过。未重跑 Exact-Statement source-only 和 fresh runtime。
+2. 2026-10-14 11:42：核对 `SKILL.md`、`references/geo-launch-gate.md`、`README.md` 都指向同一道 GEO 闸门，且 Hermes / Codex / Claude / Grok 的 skill 路径是同一份文件。未改扫描器，未跑单元测试。
+3. 2026-09-13：按哥飞口径更新后 `py_compile` 与安装副本 69/69 单元测试通过。
+4. 2026-07-17：源码 67/67 单元测试、两个脚本的 `py_compile`、validator selftest 与 `git diff --check` 通过。
+5. 2026-07-17：Exact-Statement fresh build 成功；source-only 与 fresh runtime 扫描完成，runtime 为 187 个目标、81 个已验证、7 个动态路由 gap，AdSense 最终报告校验通过。
+6. 2026-07-17：Exact runtime 连续两次 `result_hash` 均为 `6b237340e4d1e9a581dc2877279bf925dcaa1f3b2dc35600ef5d726f14d9ba74`；样本 Git 状态保持 clean。
+7. 2026-07-17：安装副本与源码逐文件 diff 为空，安装副本 67/67 测试通过。
+8. 2026-07-17：互链 Phase 3 的 54/54 单元测试、`py_compile` 与 `git diff --check` 通过。
+9. 2026-07-13：Exact-Statement source-only 扫描不读取 `.next/.open-next/.source/reports/output/.env*`，`Confirmed P0-P2=0`。
+10. 2026-07-13：隔离且不含 `.env*/.dev.vars` 的 Exact 验收 clone 在 commit `b23660f` fresh build 成功；原项目与 clone Git 状态 clean。

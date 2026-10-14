@@ -200,7 +200,6 @@
 | F9 Topical Authority 14.3% | 结构代理 | 目录/支柱 | 孤立页 P2 | 强度 Unknown | 一个关键词组一个页面；举全站之力 |
 | F10 Internal Links 11.1% | 来源→锚→目标 | — | 孤儿 P1 | 主表 | 层级、孤儿、锚文本 |
 | 横切 | 文末 | 真实用户语言 | YMYL/内部泄露 | 文案风险节 | YMYL、内部泄露 |
-| AdSense | 不并入主表 | — | 独立专项 | AdSense 节 | 全部 ADS-* |
 
 输出主表必须是上面 10 行，状态为 `Pass` / `Fail` / `Unknown` / `N/A`。`Fail` 只由 Confirmed 证据产生。
 

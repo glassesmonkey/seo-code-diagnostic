@@ -14,7 +14,7 @@
 - P0-P2 汇总只统计 `Confirmed`。因素 `Fail` 也只统计 Confirmed。覆盖不完整时必须列出 coverage gap，禁止输出“未发现问题”。
 - `diagnostic-rubric.md` 是严重度唯一事实源；其他文档只能引用，不得复制另一套阈值。
 - 不编造 GSC/Ahrefs/CTR/外链/品牌词。F2 及 F5/F6/F7/F9 线上强度默认 `Unknown`，但 F2 必须写新词新站/老词新站口径。已映射词的 Meta 相关性进 F1。品牌域非关键词域不 Fail。
-- `--adsense` 是条件分支。73 个 ADS ID 必须逐项为 `Pass / Fail / Unknown / N/A`；未完整覆盖时不得给出 Ready 类结论。
+- 本 skill 不做 AdSense 审核。申请就绪度使用独立 skill `adsense-site-auditor`，不要在本仓库补 ADS 清单或 readiness 结论。
 
 ## 扫描与隐私
 

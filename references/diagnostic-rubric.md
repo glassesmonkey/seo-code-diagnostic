@@ -116,7 +116,3 @@ P3 用于不阻断索引、也没有证据表明显著损害意图满足的改�
 - [Google Search Central: canonical consolidation](https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls)
 - [Google Search Central: spam policies - link spam](https://developers.google.com/search/docs/essentials/spam-policies#link-spam)
 - [Google Search Central: qualify outbound links](https://developers.google.com/search/docs/crawling-indexing/qualify-outbound-links)
-
-## AdSense 与 P0–P3 的边界
-
-`adsense-requirements.md` 的 `Severity` 是 ADS 审核优先级，不是本报告的 SEO `impact`。ADS ID 的结论只使用 `Pass / Fail / Unknown / N/A`；如同一证据还要生成 SEO finding，再按本文件独立定 P0–P3，禁止机械映射。

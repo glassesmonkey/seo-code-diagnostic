@@ -76,9 +76,10 @@ class AuditCliTestCase(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(payload["schema_version"], 2)
             self.assertEqual(
-                {"scope", "coverage", "routes", "findings", "adsense"},
-                {key for key in payload if key in {"scope", "coverage", "routes", "findings", "adsense"}},
+                {"scope", "coverage", "routes", "findings", "link_analysis"},
+                {key for key in payload if key in {"scope", "coverage", "routes", "findings", "link_analysis"}},
             )
+            self.assertNotIn("adsense", payload)
             self.assertEqual(payload["scope"]["base_url"], "")
             self.assertEqual(payload["scope"]["excludes"], ["private/**", "scratch/**"])
             self.assertFalse(payload["coverage"]["complete"])
@@ -446,29 +447,6 @@ class AuditCliTestCase(unittest.TestCase):
             self.assertTrue(
                 any(gap.get("path_or_url") == str(routes_file.resolve()) for gap in payload["coverage"]["gaps"])
             )
-
-    def test_adsense_without_verified_urls_has_73_unknown_items_and_zero_articles(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir) / "site"
-            for index in range(8):
-                article = root / "content" / "posts" / f"article-{index}.mdx"
-                article.parent.mkdir(parents=True, exist_ok=True)
-                article.write_text(f"# Article {index}\n\nOriginal content.", encoding="utf-8")
-
-            completed, payload = self.run_audit(root, "--adsense")
-
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            adsense = payload["adsense"]
-            self.assertTrue(adsense["enabled"])
-            self.assertEqual(len(adsense["items"]), 73)
-            self.assertEqual({item["status"] for item in adsense["items"]}, {"Unknown"})
-            self.assertEqual(adsense["article_count"], 0)
-            self.assertFalse(adsense["complete"])
-            self.assertIsNone(adsense["conclusion"])
-            serialized = json.dumps(adsense, ensure_ascii=False)
-            self.assertNotIn('"warn"', serialized)
-            self.assertNotIn('"pass"', serialized)
-            self.assertNotIn("Ready", serialized)
 
     def test_env_files_are_invisible_and_secret_like_evidence_is_redacted(self):
         with tempfile.TemporaryDirectory() as temp_dir:

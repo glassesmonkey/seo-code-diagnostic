@@ -42,27 +42,16 @@ Open each page as a visitor on desktop and mobile, click every link, read every 
 Do not call it ready from the ranking table alone. A first version of 3–5 finished pages is a valid launch set.
 ```
 
-AdSense 审核诊断：
-
-```text
-Use the $seo-code-diagnostic skill to audit this game/tool site for AdSense approval readiness.
-Target domain: https://example.com
-Primary keyword: suika game
-The site was rejected for low value content. Produce a Chinese AdSense review diagnosis with prioritized fixes.
-Cover every ADS-* requirement ID with Pass/Fail/Unknown/N/A, evidence, next action, and a Completeness Check.
-```
+AdSense 申请审核不在本 skill，改用 `adsense-site-auditor`。
 
 ## 包含内容
 
 - `SKILL.md`：URL-first 六步流程；报告按 F1–F10 组织，上线结论另看 GEO 闸门。
 - `references/geo-launch-gate.md`：GEO 上线闸门。只检查这次要公开的页面，不并进 F1–F10。
 - `scripts/seo_code_audit.py`：源码与 URL/渲染证据扫描器，输出 schema v2 JSON/Markdown 和 Top 10 因素表。
-- `scripts/adsense_report_validator.py`：73 项 assessment 模板、完整性校验和报告聚合复核器。
 - `references/gefei-ranking-practice.md`：哥飞实战口径（与 Zyppy 冲突时以本文件为准）。
 - `references/zyppy-2026-ranking-factors.md`：调研排序校准。
 - `references/ahrefs-learning-notes.md`：Ahrefs 官方教程的诊断化学习笔记（与 Zyppy 冲突时以证据门为准）。
-- `references/adsense-requirements.md`：AdSense 官方来源驱动的 73 个 ADS ID 和证据要求。
-- `references/adsense-review-diagnostic.md`：AdSense 审核、low value content 和游戏/工具站薄壳风险诊断。
 - `references/seo-principles.md`：页面类型、搜索意图和内容价值判断。
 - `references/diagnostic-rubric.md`：P0–P3 严重度唯一事实源，含规则→因素映射。
 - `references/framework-adapters.md`：框架路由、metadata 和渲染证据适配规则。
@@ -111,57 +100,18 @@ python scripts/seo_code_audit.py \
 
 Next.js 不读取既有 `.next`/`.open-next`；应在本轮 build 成功后启动本地服务，再使用 `--base-url`。
 
-只有用户明确要求 AdSense 审核时才添加：
-
-```bash
-python scripts/seo_code_audit.py \
-  --root . \
-  --domain "https://example.com" \
-  --base-url "http://127.0.0.1:3000" \
-  --adsense \
-  --out ../seo-audit
-```
-
-需要合并后台、授权、人工检查或其他外部证据时，先生成完整模板：
-
-```bash
-python scripts/adsense_report_validator.py \
-  --template \
-  --target-domain "https://example.com" > ../adsense-assessments.json
-```
-
-只在模板中保存非敏感摘要、公开 URL、仓库相对路径和不透明 `evidence_ref`，不要写入授权原件、后台截图、密钥、个人信息或本地绝对路径。填写后先校验，再合并并复核最终报告：
-
-```bash
-python scripts/adsense_report_validator.py \
-  --check-assessments ../adsense-assessments.json \
-  --target-domain "https://example.com"
-
-python scripts/seo_code_audit.py \
-  --root . \
-  --domain "https://example.com" \
-  --base-url "http://127.0.0.1:3000" \
-  --adsense \
-  --adsense-assessments ../adsense-assessments.json \
-  --out ../seo-audit
-
-python scripts/adsense_report_validator.py --check-report ../seo-audit.json
-```
-
-扫描器自动排除 assessment 输入文件，报告只保留输入模式和 SHA-256。校验器证明 73 项结构、状态和派生结论自洽，不证明证据陈述真实。
-
 脚本会生成：
 
 - `seo-audit.json`
 - `seo-audit.md`
 
-每份 JSON 固定包含 `scope`、`coverage`、`routes`、`findings`、`link_analysis`、`adsense`。finding 的证据状态为：
+每份 JSON 固定包含 `scope`、`coverage`、`routes`、`findings`、`link_analysis`。finding 的证据状态为：
 
 - `Confirmed`：当前 URL 响应或可复现仓库事实已证明；
 - `Candidate`：源码启发式或仍需映射/解释的线索；
 - `Unknown`：覆盖、读取或解析证据不足。
 
-P0–P2 汇总只统计 `Confirmed`。coverage 不完整时不能得出“未发现问题”。第三方请求失败只进入 `link_analysis.gaps`，不会污染主站 coverage。AdSense 页面数、文章数和内容状态只按已验证 URL 计算；完整审核必须覆盖 73 个 ADS ID，且状态只能是 `Pass / Fail / Unknown / N/A`。`readiness` 只有在 coverage 完整且不存在 `Unknown` 时才为 `READY`、`READY_AFTER_FIXES` 或 `NOT_READY`，否则为 `null`。
+P0–P2 汇总只统计 `Confirmed`。coverage 不完整时不能得出“未发现问题”。第三方请求失败只进入 `link_analysis.gaps`，不会污染主站 coverage。报告不再包含 AdSense 对象。
 
 复跑稳定性使用 `scope.provenance.result_hash` 比较；生成时间不参与该哈希。
 
@@ -169,7 +119,6 @@ P0–P2 汇总只统计 `Confirmed`。coverage 不完整时不能得出“未发
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m py_compile scripts/seo_code_audit.py scripts/adsense_report_validator.py
-python3 scripts/adsense_report_validator.py --selftest
+python3 -m py_compile scripts/seo_code_audit.py
 git diff --check
 ```

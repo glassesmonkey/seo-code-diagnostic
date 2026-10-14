@@ -17,10 +17,6 @@ Example:
 Reports include a Top 10 factor table. Mapped keywords are checked for
 TDH/focus (哥飞). Missing meta description is not P1, but Meta-keyword
 mismatch is an F1 relevance gap and an F5 CTR lever.
-
-AdSense approval-readiness checks:
-  python scripts/seo_code_audit.py --root . --domain https://example.com \
-    --keywords "suika game,play suika game" --adsense --out seo-audit
 """
 
 from __future__ import annotations
@@ -45,16 +41,6 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from adsense_report_validator import (  # noqa: E402
-    load_registry as load_adsense_registry,
-    summarize_items as summarize_adsense_items,
-    validate_assessments,
-)
 
 EXCLUDED_DIR_NAMES = {
     ".git",
@@ -1484,92 +1470,6 @@ def redact_report_value(value: object, key: Optional[str] = None) -> object:
 
 def add_issue(issues: List[Issue], severity: str, code: str, file: str, evidence: str, recommendation: str) -> None:
     issues.append(Issue(severity, code, file, normalize_ws(evidence), normalize_ws(recommendation)))
-
-
-def adsense_requirements() -> List[Dict[str, str]]:
-    try:
-        return load_adsense_registry()
-    except (OSError, UnicodeError, ValueError):
-        return []
-
-
-def adsense_requirement_ids() -> List[str]:
-    return [item["id"] for item in adsense_requirements()]
-
-
-def build_adsense_contract(
-    enabled: bool,
-    routes: List[Dict[str, object]],
-    coverage: Dict[str, object],
-    assessments: Optional[Dict[str, object]] = None,
-) -> Dict[str, object]:
-    requirements = adsense_requirements()
-    requirement_ids = [item["id"] for item in requirements]
-    empty_counts = {status: 0 for status in ["Pass", "Fail", "Unknown", "N/A"]}
-    if not enabled:
-        return {
-            "enabled": False,
-            "status": "N/A",
-            "requirement_total": len(requirements),
-            "reported_total": 0,
-            "missing_ids": [],
-            "status_counts": empty_counts,
-            "items": [],
-            "article_count": 0,
-            "article_routes": [],
-            "complete": False,
-            "conclusion": None,
-            "summary": empty_counts,
-            "readiness": None,
-            "remediation_order": [],
-        }
-
-    assessment_by_id = {
-        str(item.get("id")): item
-        for item in (assessments or {}).get("items", [])
-        if isinstance(item, dict) and item.get("id")
-    }
-    items = []
-    for requirement in requirements:
-        assessment = assessment_by_id.get(requirement["id"])
-        if assessment is None:
-            assessment = {
-                "id": requirement["id"],
-                "status": "Unknown",
-                "evidence": "当前审计没有足以确认该要求的直接证据。",
-                "next_action": requirement["how_to_verify"],
-                "evidence_kind": "coverage_gap",
-                "path_or_url": None,
-                "evidence_ref": None,
-                "provenance": {"mode": "coverage-gap"},
-                "effort": "Unknown",
-                "applicability_reason": None,
-            }
-        items.append({**assessment, **requirement})
-    verified_article_routes = [
-        str(route.get("route"))
-        for route in routes
-        if route.get("is_article") is True
-        and route.get("registry_status") == "registered"
-        and "registry" in route.get("sources", [])
-        and route.get("runtime_reachable") is True
-        and route.get("status_code") == 200
-        and route.get("coverage_status") == "verified"
-        and route.get("evidence_kind") in {"http", "current_rendered"}
-    ]
-    reported_ids = {str(item.get("id")) for item in items}
-    missing_ids = [ads_id for ads_id in requirement_ids if ads_id not in reported_ids]
-    aggregation = summarize_adsense_items(items, coverage.get("complete") is True)
-    return {
-        "enabled": True,
-        "requirement_total": len(requirements),
-        "reported_total": len(items),
-        "missing_ids": missing_ids,
-        "items": items,
-        "article_count": len(verified_article_routes),
-        "article_routes": sorted(verified_article_routes),
-        **aggregation,
-    }
 
 
 YMYL_TOPIC_PATTERNS = [
@@ -3649,33 +3549,6 @@ def write_markdown(result: Dict[str, object], output_path: Path) -> None:
             ]
         )
 
-    adsense = dict(result.get("adsense", {}))
-    if adsense.get("enabled"):
-        lines.extend(
-            [
-                "## AdSense",
-                f"- 状态：{escape_md(adsense.get('status'))}",
-                f"- Readiness：{escape_md(adsense.get('readiness') or 'undetermined')}",
-                f"- 已验证文章路由：{int(adsense.get('article_count', 0) or 0)}",
-                f"- 检查项：{int(adsense.get('reported_total', 0) or 0)}/{int(adsense.get('requirement_total', 0) or 0)}",
-                f"- 证据完整：{'是' if adsense.get('complete') else '否'}",
-                "",
-                "| ADS ID | Severity | Status | Effort | Evidence | Next action |",
-                "|---|---|---|---|---|---|",
-            ]
-        )
-        for item in adsense.get("items", []):
-            lines.append(
-                f"| {escape_md(item.get('id'))} | {escape_md(item.get('severity'))} | "
-                f"{escape_md(item.get('status'))} | {escape_md(item.get('effort'))} | "
-                f"{escape_md(item.get('evidence'))} | "
-                f"{escape_md(item.get('next_action'))} |"
-            )
-        remediation_order = list(adsense.get("remediation_order", []))
-        if remediation_order:
-            lines.extend(["", "修复顺序：" + " → ".join(escape_md(item) for item in remediation_order)])
-        lines.append("")
-
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -3723,12 +3596,6 @@ def main(
         default="",
         help="Comma-separated unmapped keywords. Mapped page keywords are scored for TDH/focus; this list is not applied to every page.",
     )
-    parser.add_argument("--adsense", action="store_true", help="Add AdSense approval-readiness checks for game/tool/content sites.")
-    parser.add_argument(
-        "--adsense-assessments",
-        default="",
-        help="Validated 73-item AdSense assessment JSON; requires --adsense and --domain.",
-    )
     parser.add_argument("--out", default="seo-audit", help="Output prefix, without extension.")
     parser.add_argument("--base-url", default="", help="Local or remote HTTP origin reserved for URL-level verification.")
     parser.add_argument("--routes-file", default="", help="JSON route intent mapping.")
@@ -3761,27 +3628,6 @@ def main(
     domain = normalize_domain(args.domain)
     keywords = [normalize_ws(x) for x in args.keywords.split(",") if normalize_ws(x)]
 
-    assessment_path: Optional[Path] = None
-    assessment_payload: Optional[Dict[str, object]] = None
-    assessment_scope: Dict[str, object] = {"mode": "not_provided", "sha256": None}
-    if args.adsense_assessments:
-        if not args.adsense or not domain:
-            parser.error("--adsense-assessments requires both --adsense and --domain")
-        assessment_path = Path(args.adsense_assessments).resolve()
-        try:
-            assessment_bytes = assessment_path.read_bytes()
-            loaded_assessments = json.loads(assessment_bytes.decode("utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            parser.error(f"unable to read --adsense-assessments: {type(exc).__name__}")
-        assessment_errors = validate_assessments(loaded_assessments, expected_domain=domain)
-        if assessment_errors:
-            parser.error("invalid --adsense-assessments:\n- " + "\n- ".join(assessment_errors))
-        assessment_payload = loaded_assessments
-        assessment_scope = {
-            "mode": "provided",
-            "sha256": hashlib.sha256(assessment_bytes).hexdigest(),
-        }
-
     out_prefix = Path(args.out)
     if not out_prefix.is_absolute():
         if args.out == "seo-audit":
@@ -3797,8 +3643,6 @@ def main(
     runtime_enabled = bool(base_url)
     rendered_root = Path(args.rendered_root).resolve() if args.rendered_root else None
     excluded_input_paths = [json_path, md_path]
-    if assessment_path is not None:
-        excluded_input_paths.append(assessment_path)
     inventory_files = [p for p in iter_files(root, args.exclude, excluded_input_paths)]
     fumadocs_candidates = discover_fumadocs_registry(root, inventory_files)
     locale_message_candidates = discover_locale_message_registry(root, inventory_files)
@@ -4169,14 +4013,12 @@ def main(
             "output_paths": [str(json_path), str(md_path)],
             "scanned_paths": sorted(rel_posix(path, root) for path in all_files),
             "unmapped_keywords": unmapped_keywords,
-            "adsense_assessments": assessment_scope,
             "provenance": {"mode": mode, "source_commit": commit},
         },
         "coverage": coverage,
         "routes": routes,
         "findings": findings,
         "link_analysis": link_analysis,
-        "adsense": build_adsense_contract(bool(args.adsense), routes, coverage, assessment_payload),
         "summary": {
             "confirmed_by_impact": coverage["confirmed_counts"],
             "finding_statuses": dict(Counter(finding["status"] for finding in findings)),

@@ -634,7 +634,7 @@ class RuntimeAuditTestCase(unittest.TestCase):
             self.assertEqual(payload["coverage"]["gap_total"], 0)
             self.assertTrue(payload["coverage"]["complete"])
 
-    def test_routes_file_cannot_inject_runtime_evidence_or_adsense_article_count(self):
+    def test_routes_file_cannot_inject_runtime_evidence(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             root = workspace / "site"
@@ -672,7 +672,6 @@ class RuntimeAuditTestCase(unittest.TestCase):
                     str(root),
                     "--routes-file",
                     str(routes_file),
-                    "--adsense",
                     "--out",
                     str(output_prefix),
                 ],
@@ -694,7 +693,6 @@ class RuntimeAuditTestCase(unittest.TestCase):
             self.assertEqual(route["route_kind"], "public")
             self.assertTrue(route["scored"])
             self.assertNotIn("is_article", route)
-            self.assertEqual(payload["adsense"]["article_count"], 0)
 
     def test_runtime_verification_resolves_source_unknown_without_global_coverage_gap(self):
         page = (
@@ -894,61 +892,6 @@ class RuntimeAuditTestCase(unittest.TestCase):
             by_route = {route["route"]: route for route in payload["routes"]}
             self.assertEqual(by_route["/blocked/page"]["indexability"], "blocked")
             self.assertEqual(by_route["/blocked/preview"]["indexability"], "indexable")
-
-    def test_adsense_reports_formal_73_items_and_counts_only_verified_registered_articles(self):
-        article_routes = [f"/blog/article-{index}" for index in range(4)]
-        page = (
-            "<html><head><title>Article</title>"
-            '<meta name="description" content="A complete article description.">'
-            '<link rel="canonical" href="https://prod.example/article"></head>'
-            "<body><main><h1>Article</h1><p>Original article content.</p><a href='/'>Home</a></main></body></html>"
-        )
-        sitemap = "<urlset>" + "".join(
-            f"<url><loc>https://prod.example{route}</loc></url>" for route in article_routes
-        ) + "</urlset>"
-        responses = {
-            "/robots.txt": (200, {"Content-Type": "text/plain"}, "User-agent: *\nAllow: /\n"),
-            "/sitemap.xml": (200, {"Content-Type": "application/xml"}, sitemap),
-            **{route: (200, {"Content-Type": "text/html"}, page) for route in article_routes},
-            "/blog/__seo-audit-sentinel__": (404, {"Content-Type": "text/html"}, "Not found"),
-        }
-        with tempfile.TemporaryDirectory() as temp_dir, fixture_server(responses) as base_url:
-            root = Path(temp_dir) / "site"
-            posts = root / "content" / "posts"
-            posts.mkdir(parents=True)
-            (root / "source.config.ts").write_text(
-                "export const posts = defineDocs({ dir: 'content/posts' });\n",
-                encoding="utf-8",
-            )
-            for index in range(4):
-                (posts / f"article-{index}.mdx").write_text(
-                    f"# Article {index}\n\nOriginal registered article content.\n",
-                    encoding="utf-8",
-                )
-
-            completed, payload = self.run_audit(
-                root,
-                base_url,
-                "--domain",
-                "https://prod.example",
-                "--adsense",
-            )
-
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            adsense = payload["adsense"]
-            self.assertEqual(adsense["requirement_total"], 73)
-            self.assertEqual(adsense["reported_total"], 73)
-            self.assertEqual(adsense["missing_ids"], [])
-            self.assertEqual(adsense["status_counts"], {"Pass": 0, "Fail": 0, "Unknown": 73, "N/A": 0})
-            self.assertEqual(len(adsense["items"]), 73)
-            self.assertEqual(adsense["article_count"], 4)
-            self.assertEqual(sorted(adsense["article_routes"]), article_routes)
-            self.assertFalse(adsense["complete"])
-            self.assertIsNone(adsense["conclusion"])
-            for item in adsense["items"]:
-                self.assertIn(item["status"], {"Pass", "Fail", "Unknown", "N/A"})
-                for field in ["id", "severity", "requirement", "how_to_verify", "evidence", "next_action"]:
-                    self.assertTrue(item[field], (item["id"], field))
 
     def test_global_keywords_exclude_terms_already_mapped_by_routes_file(self):
         page = (

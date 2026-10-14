@@ -1,6 +1,6 @@
 ---
 name: seo-code-diagnostic
-description: "Use when SEO 诊断, AdSense, or GEO 上线前走查. URL-first ranking audit plus a visitor launch gate: pages shipping now must be finished before GPT traffic can arrive. Follow 哥飞. Do not invent GSC metrics. Scanner pass is not GEO ready."
+description: "Use when SEO 诊断 or GEO 上线前走查. URL-first ranking audit plus a visitor launch gate: pages shipping now must be finished before GPT traffic can arrive. Follow 哥飞. Do not invent GSC metrics. Scanner pass is not GEO ready. AdSense 审核不在本 skill。"
 ---
 
 # SEO Code Diagnostic
@@ -30,7 +30,6 @@ description: "Use when SEO 诊断, AdSense, or GEO 上线前走查. URL-first ra
 | 有本轮服务 | `--base-url` | HTTP 证据可进入 `Confirmed`；同时有 `--domain` 时默认受控验证站外互链 |
 | 有本轮静态输出 | `--rendered-root` | 当前 HTML 可进入 `Confirmed` |
 | 无法构建/启动 | source-only | 源码启发式最多 `Candidate` |
-| 用户明确要求 AdSense | 以上模式 + `--adsense` | 仍受 73 ID completeness 约束 |
 | 即将上线，或用户问能不能上线 | 必跑 GEO 闸门 | 扫描器结论不能写成「可以上线」 |
 | 已上线，且只要排名诊断 | 不跑全站点击 | 写明「GEO 闸门：未纳入本次范围」，不得声称上线就绪 |
 
@@ -131,24 +130,10 @@ python /path/to/seo-code-diagnostic/scripts/seo_code_audit.py \
 
 ### 6. 报告并复核
 
-按 schema v2 输出固定的 `scope`、`coverage`、`routes`、`findings`、`link_analysis`、`adsense`，并附 10 行 `factor_summary`。中文结论先写 GEO 闸门结论（就绪 / 未就绪 / 未纳入本次范围），再写 coverage 和互链验证覆盖，再写 Top 10 因素表（F1 含 TDH/聚焦和域名加分观察；F2 含新词新站/老词新站口径），再写 Confirmed 问题，再列 Candidate/Unknown 和按因素排序的最小修复动作。互链验证失败只影响 `link_analysis`，不得污染主站 coverage；coverage 不完整时禁止写“未发现问题”。
+按 schema v2 输出固定的 `scope`、`coverage`、`routes`、`findings`、`link_analysis`，并附 10 行 `factor_summary`。中文结论先写 GEO 闸门结论（就绪 / 未就绪 / 未纳入本次范围），再写 coverage 和互链验证覆盖，再写 Top 10 因素表（F1 含 TDH/聚焦和域名加分观察；F2 含新词新站/老词新站口径），再写 Confirmed 问题，再列 Candidate/Unknown 和按因素排序的最小修复动作。互链验证失败只影响 `link_analysis`，不得污染主站 coverage；coverage 不完整时禁止写“未发现问题”。
 
-仅当用户明确要求 AdSense 时加 `--adsense`，并加载：
-
-- [`references/adsense-requirements.md`](references/adsense-requirements.md)：只取全部 73 个 ADS ID 及其证据要求；
-- [`references/adsense-review-diagnostic.md`](references/adsense-review-diagnostic.md)：游戏/工具站内容与政策判断。
-
-状态和 readiness 以 report contract 为准。每个 ADS ID 只能是 `Pass / Fail / Unknown / N/A`。页面数、文章数和内容判断只使用已验证 URL；未覆盖就是 `Unknown`。73 项未完整覆盖或关键外部证据未取得时，`readiness` 保持 `null`。
-
-需要合并人工、后台、授权、analytics 或法律证据时，按以下顺序执行：
-
-1. 用 `scripts/adsense_report_validator.py --template --target-domain URL` 生成 73 项模板；
-2. 只填写非敏感摘要、公开 URL、仓库相对路径和不透明 `evidence_ref`；
-3. 用 `--check-assessments` 校验后，将文件传给扫描器的 `--adsense-assessments`；
-4. 用 `--check-report` 复核最终 JSON 的计数、结论、readiness 和修复顺序。
-
-`--adsense-assessments` 必须与 `--adsense --domain` 同时使用。扫描器排除该输入，只在 scope 记录模式和 SHA-256。校验器只能证明结构与聚合自洽，不能证明证据内容真实。
+AdSense 申请审核不在本 skill。需要时改用 `adsense-site-auditor`，不要在这里补 73 项清单或 readiness 结论。
 
 连续运行两次，比较 `scope.provenance.result_hash`，确认第二次不扫描第一次报告且结果稳定；验证报告没有密钥或原始用户数据。若执行了代码修改，再运行项目 lint/build/test 并只声明实际验证结果。
 
-**完成标准：** schema v2 可解析、coverage 与汇总一致、Top 10 因素表 10 行且无编造线上指标、AdSense completeness 可核对、重复运行稳定、隐私检查通过。GEO 闸门结论与走查记录一致，没有用扫描器通过代替闸门通过。
+**完成标准：** schema v2 可解析、coverage 与汇总一致、Top 10 因素表 10 行且无编造线上指标、重复运行稳定、隐私检查通过。GEO 闸门结论与走查记录一致，没有用扫描器通过代替闸门通过。报告不得出现 `adsense` 对象。

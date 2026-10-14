@@ -1,10 +1,10 @@
 # Report Contract v2
 
-本文件定义扫描器与人工报告共享的 schema、coverage 和 evidence gate。字段可以扩展，不能删除或改义；其他 reference 的旧输出示例与本文件冲突时，以本文件为准。
+本文件定义扫描器与人工报告共享的 schema、coverage 和 evidence gate。字段可以扩展；删除字段必须先改本文件。`adsense` 对象已从本 skill 移除。其他 reference 的旧输出示例与本文件冲突时，以本文件为准。
 
 ## CLI 契约
 
-保留：`--root`、`--domain`、`--keywords`、`--adsense`、`--out`。
+保留：`--root`、`--domain`、`--keywords`、`--out`。
 
 新增：
 
@@ -13,7 +13,6 @@
 - `--rendered-root PATH`：只接收本轮生成的静态 HTML 目录；
 - `--exclude GLOB`：可重复，追加到硬排除列表；
 - `--reciprocal-links auto|off`：默认 `auto`；同时存在 `--base-url` 和 `--domain` 时受控访问站外目标页与其首页，`off` 明确禁止第三方请求。
-- `--adsense-assessments PATH`：只与 `--adsense --domain` 同用；加载通过独立校验的 73 项人工/外部证据。
 
 `--keywords` 只生成未映射词清单，不应用到所有页面。推荐 routes file：
 
@@ -41,12 +40,11 @@
   "coverage": {},
   "routes": [],
   "findings": [],
-  "link_analysis": {},
-  "adsense": {}
+  "link_analysis": {}
 }
 ```
 
-这六个对象/数组始终存在；未运行互链验证时保留 `link_analysis.status: not_run`，未启用 AdSense 时保留 `adsense.enabled: false`。
+这五个对象/数组始终存在；未运行互链验证时保留 `link_analysis.status: not_run`。报告不再包含 `adsense` 对象。AdSense 申请审核改用独立 skill `adsense-site-auditor`。
 
 ### `scope`
 
@@ -58,7 +56,6 @@
 - `source_commit`、`started_at`；
 - `route_sources`、`excludes`、`output_paths`；
 - `unmapped_keywords`；
-- `adsense_assessments: {mode, sha256}`：只记录 `provided | not_provided` 和输入字节 SHA-256，不记录输入路径或原始证据；
 - `provenance`：对象，至少含 `mode`；按模式记录本轮 build/serve、commit、开始时间或静态目录来源；`result_hash` 是排除时间字段后的稳定结果哈希，用于复跑比较。
 
 不得把 secret 值、原始上传路径内的用户内容或环境变量片段放进 scope。
@@ -154,64 +151,8 @@
 - `Unknown`：读取失败、截断、无法解析、路由/意图无法映射或当前没有页面覆盖。
 - 同一问题按 `route + code + content_hash` 去重，不能因 `.next`、standalone、OpenNext 或重复文件复制计数。
 - Next.js 既有构建目录永远不能成为 evidence；静态 `--rendered-root` 必须有 current-run provenance。
-- 连续运行比较 `scope.provenance.result_hash`；时间、输出路径和可能含构建 nonce 的 runtime/current-rendered 原始正文哈希不参与，已提取语义字段、assessment 内容及其 SHA-256 仍参与。
+- 连续运行比较 `scope.provenance.result_hash`；时间、输出路径和可能含构建 nonce 的 runtime/current-rendered 原始正文哈希不参与，已提取语义字段仍参与。
 - 互链 `Confirmed` 只确认当前双方 HTTP 页面呈现的可观察链接模式，不确认站点所有权、付费关系、主题相关性或操纵排名意图。
-
-## AdSense 对象
-
-```json
-{
-  "enabled": false,
-  "status": "N/A",
-  "requirement_total": 73,
-  "reported_total": 0,
-  "missing_ids": [],
-  "status_counts": {"Pass": 0, "Fail": 0, "Unknown": 0, "N/A": 0},
-  "items": [],
-  "article_count": 0,
-  "complete": false,
-  "conclusion": null,
-  "readiness": null,
-  "remediation_order": []
-}
-```
-
-- 每个 ADS ID 只能为 `Pass / Fail / Unknown / N/A`，不存在 `warn`。
-- 每项包含 `evidence`、`evidence_kind`、`path_or_url`、`evidence_ref`、`provenance`、`next_action`、`effort` 和 `applicability_reason`。`effort` 只使用 `S / M / L / Unknown / N/A`。
-- `Pass/Fail` 需要非占位直接证据、有效 provenance，以及相应公开 URL、仓库相对路径或不透明 evidence ref；`coverage_gap` 不能冒充证据。
-- `Unknown` 必须说明缺口和下一步；`N/A` 必须说明不适用理由。没有覆盖就是 `Unknown`。
-- 页面数、文章数、必备页和内容质量只按已验证 URL 统计，源码文件数不能冒充页面数。
-- 73 个 ID 未全部报告、存在 coverage gap，或任一项为 `Unknown` 时，`complete` 为 false，`conclusion` 与 `readiness` 均为 `null`。
-- coverage 完整且不存在 `Unknown` 时：存在 Blocker `Fail` 为 `NOT_READY`；仅有 High/Medium `Fail` 为 `READY_AFTER_FIXES`；全部 `Pass/N/A` 为 `READY`。
-- `conclusion` 是兼容字段：完整且有 `Fail` 为 `Fail`，完整且无 `Fail` 为 `Pass`，否则为 `null`。
-- `remediation_order` 只列 `Fail`，按 `Blocker > High > Medium`、同级 `S > M > L`、最后 ADS ID 排序。
-
-### Assessment 输入
-
-```json
-{
-  "schema_version": 1,
-  "target_domain": "https://example.com",
-  "items": [
-    {
-      "id": "ADS-ELIG-01",
-      "status": "Unknown",
-      "evidence": "当前没有账户持有人年龄证据。",
-      "evidence_kind": "coverage_gap",
-      "path_or_url": null,
-      "evidence_ref": null,
-      "provenance": {"mode": "coverage-gap"},
-      "next_action": "由账户持有人确认资格并提供不透明证据编号。",
-      "effort": "Unknown",
-      "applicability_reason": null
-    }
-  ]
-}
-```
-
-实际输入必须包含全部 73 项且每个 ID 恰好一次。目标域名必须与最终报告 `scope.domain` 一致。assessment 文件自动从源码扫描中排除；授权原件、后台截图、个人信息、密钥和本地绝对路径不得进入输入或报告。
-
-使用 `scripts/adsense_report_validator.py --check-assessments` 校验输入，再用 `--check-report` 重算最终报告的计数、`complete`、`conclusion`、`readiness` 和 `remediation_order`。校验器保证结构与派生结果自洽，不证明证据陈述真实。
 
 ## Markdown 汇报顺序
 
@@ -221,9 +162,8 @@
 4. Confirmed P0–P2；
 5. Candidate 与 Unknown；
 6. 路由/关键词覆盖；
-7. 条件 AdSense completeness；
-8. 按因素排序的最小修复与验证方法。
+7. 按因素排序的最小修复与验证方法。
 
 coverage 不完整时，结论必须写明“未完成目标路由验证”，禁止写“未发现 SEO 问题”。不得编造 GSC CTR、外链数量、品牌词量或权威分。缺 description 不得写成 P1；已映射关键词的 Meta 相关性进 F1。
 
-`factor_summary` 与 `emd_observation` 是 schema v2 可扩展字段；六个顶层对象仍必须存在。因素 `Fail` 只统计 Confirmed finding。
+`factor_summary` 与 `emd_observation` 是 schema v2 可扩展字段；五个顶层对象仍必须存在。因素 `Fail` 只统计 Confirmed finding。报告不得再出现 `adsense`。
