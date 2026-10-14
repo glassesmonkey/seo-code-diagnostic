@@ -1,6 +1,6 @@
 # SEO Code Diagnostic
 
-一个 URL-first、evidence-gated 的 Codex SEO 诊断 skill。它把路由覆盖、当前 HTTP/静态渲染证据和源码线索分开，避免把构建产物或启发式命中误报成线上问题；运行时模式还会受控验证站外互链。
+一个 URL-first、evidence-gated 的 SEO 诊断 skill。它把路由覆盖、当前 HTTP/静态渲染证据和源码线索分开，避免把构建产物或启发式命中误报成线上问题；运行时模式还会受控验证站外互链。上线前另有一道 GEO 闸门：只走这次要公开的页面，以普通用户打开、点链接、读文案。扫描器通过不等于可以上线。
 
 报告主表按 F1–F10 组织。实战口径以哥飞为准（TDH + 密度看聚焦、一个关键词组一个页面、举全站之力、新词新站可无链 / 老词新站必须有链）。Zyppy 调研只校准排序。没有 GSC/外链表/品牌数据时，F2/F5/F6/F7/F9 的线上信号必须 `Unknown`，但 F2 仍要写出场景口径。关键词域名是 F1 加分，品牌域不是关键词域不 Fail。
 
@@ -9,16 +9,16 @@
 安装副本可放到以下任意位置：
 
 - 仓库级：`<repo>/.codex/skills/seo-code-diagnostic/`
-- 用户级：`~/.codex/skills/seo-code-diagnostic/`
+- 用户级：`~/.agents/skills/seo-code-diagnostic/`
 
 如果从 GitHub 安装，先保留独立源码 clone，再同步安装副本：
 
 ```bash
 git clone https://github.com/glassesmonkey/seo-code-diagnostic.git ~/seo-code-diagnostic-src
-rsync -a --exclude .git ~/seo-code-diagnostic-src/ ~/.codex/skills/seo-code-diagnostic/
+rsync -a --exclude .git ~/seo-code-diagnostic-src/ ~/.agents/skills/seo-code-diagnostic/
 ```
 
-GitHub clone 是可提交源码；`~/.codex/skills/seo-code-diagnostic` 是安装副本。修改和验证应在源码 clone 中完成，再机械同步到安装副本。
+GitHub clone 是可提交源码；`~/.agents/skills/seo-code-diagnostic` 是安装副本。Codex、Claude、Grok、Hermes 都符号链接到这个目录。修改和验证应在源码 clone 中完成，再机械同步到安装副本。
 
 在 Codex 中可显式调用 `$seo-code-diagnostic`，也可在 SEO 代码审计任务中自动触发。
 
@@ -33,6 +33,15 @@ Please produce a Chinese SEO diagnosis and suggest minimal code fixes.
 Use current-run URL evidence where available and list every coverage gap.
 ```
 
+上线前 GEO 走查：
+
+```text
+Use the $seo-code-diagnostic skill before this site goes live.
+Launch pages: /, /tool, /pricing
+Open each page as a visitor on desktop and mobile, click every link, read every visible line, and fix what is unfinished.
+Do not call it ready from the ranking table alone. A first version of 3–5 finished pages is a valid launch set.
+```
+
 AdSense 审核诊断：
 
 ```text
@@ -45,7 +54,8 @@ Cover every ADS-* requirement ID with Pass/Fail/Unknown/N/A, evidence, next acti
 
 ## 包含内容
 
-- `SKILL.md`：URL-first 五步流程；报告按 F1–F10 组织。
+- `SKILL.md`：URL-first 六步流程；报告按 F1–F10 组织，上线结论另看 GEO 闸门。
+- `references/geo-launch-gate.md`：GEO 上线闸门。只检查这次要公开的页面，不并进 F1–F10。
 - `scripts/seo_code_audit.py`：源码与 URL/渲染证据扫描器，输出 schema v2 JSON/Markdown 和 Top 10 因素表。
 - `scripts/adsense_report_validator.py`：73 项 assessment 模板、完整性校验和报告聚合复核器。
 - `references/gefei-ranking-practice.md`：哥飞实战口径（与 Zyppy 冲突时以本文件为准）。

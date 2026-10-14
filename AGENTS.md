@@ -2,7 +2,7 @@
 
 ## 边界
 
-- 本仓库是可提交源码的唯一事实源；`~/.codex/skills/seo-code-diagnostic` 只是安装副本，只能在本仓库全部验证通过后做机械同步。
+- 本仓库是可提交源码的唯一事实源；`~/.agents/skills/seo-code-diagnostic` 只是安装副本，只能在本仓库全部验证通过后做机械同步。Codex、Claude、Grok、Hermes 都符号链接到该目录。
 - `/Users/gc/mydisk2/outsea/Exact-Statement` 是只读验收样本。不得修改其源码、配置、依赖、数据库或 Git 状态；构建只能产生项目已忽略的产物。
 - 不在本任务中 push、发布、部署、修改 Cloudflare、修改 `.env*` 或引入全局依赖。
 
